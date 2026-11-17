@@ -317,7 +317,7 @@ HTML = r"""<!doctype html>
 :root{color-scheme:dark;font-family:Inter,system-ui,Arial,sans-serif;background:#0a101c;color:#f2f5fb}
 *{box-sizing:border-box}body{margin:0}header{padding:22px max(20px,calc((100vw - 1040px)/2));border-bottom:1px solid #26344d;display:flex;gap:12px;align-items:center}
 .logo{background:#6477ff;border-radius:12px;padding:12px;font-size:22px}
-main{max-width:1040px;margin:40px auto;padding:0 20px}
+main{max-width:1250px;margin:40px auto;padding:0 20px}
 h1{font-size:clamp(30px,5vw,52px);letter-spacing:-1.7px;margin:0 0 10px}
 p{color:#aab9d2;line-height:1.6}section{background:#141e30;border:1px solid #2b3b55;border-radius:20px;padding:24px;margin:22px 0}
 label{display:block;font-weight:650;margin:16px 0 8px}
@@ -332,14 +332,23 @@ button:disabled{opacity:.55;cursor:wait}
 .progress-bar{height:100%;width:0;background:linear-gradient(90deg,#6378ff,#5ad5da);transition:width .3s}
 #status{overflow-wrap:anywhere}video{display:block;max-width:100%;width:100%;max-height:520px;border-radius:12px;background:black}
 .features{display:flex;gap:10px;flex-wrap:wrap}.features span{padding:9px 13px;border:1px solid #344966;border-radius:99px;color:#b6c8e6}
+.editor-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(300px,.7fr);gap:20px;align-items:start}
+.preview-pane{background:#0b1322;border:1px solid #2b3b55;border-radius:16px;padding:15px}
+.editor-preview{max-height:430px;aspect-ratio:16/9;object-fit:contain;width:100%}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+input[type=number],input[type=range]{width:100%}
+input[type=number]{padding:13px;background:#0c1423;color:white;border:1px solid #384964;border-radius:10px}
+input[type=range]{accent-color:#7484ff}
+.pill{color:#9ec1ff;border:1px solid #374b70;border-radius:10px;padding:8px 10px;display:inline-block;margin-top:12px}
+@media(max-width:800px){.editor-grid{grid-template-columns:1fr}.controls{grid-template-columns:1fr}}
 .hidden{display:none}footer{text-align:center;color:#8498b5;padding:28px}
 </style></head><body>
 <header><div class="logo">✦</div><strong>Editor de Vídeo Automático</strong></header>
 <main>
-<h1>Seu vídeo, com acabamento profissional.</h1>
-<p>Envie o arquivo, selecione o estilo e acompanhe a edição automática. Sem timeline ou ajustes manuais.</p>
+<h1>Estúdio de edição de vídeo</h1>
+<p>Prévia do material, corte por tempo, capa, filtros, zoom e melhoria automática — com controles inspirados em editores como o CapCut.</p>
 <div class="features"><span>✓ Cor e nitidez</span><span>✓ Voz mais clara</span><span>✓ Zoom dinâmico</span><span>✓ Cortes de pausas</span><span>✓ MP4 pronto</span></div>
-<section>
+<div class="editor-grid"><section>
 <form id="form">
 <label for="video">Vídeo original *</label><input id="video" name="video" type="file" accept="video/*,.mkv,.avi" required>
 <p class="small">MP4, MOV, MKV, AVI ou WebM · até 4 GB (sujeito ao limite da hospedagem)</p>
@@ -348,14 +357,31 @@ button:disabled{opacity:.55;cursor:wait}
 <div class="track" role="progressbar" aria-label="Envio do arquivo"><div id="uploadBar" class="progress-bar"></div></div>
 <span id="uploadPercent">0% — aguardando envio</span>
 </div>
+<div class="controls">
+<div><label for="start_at">✂️ Início do corte (segundos)</label><input type="number" min="0" step="0.1" value="0" id="start_at" name="start_at"></div>
+<div><label for="end_at">✂️ Fim do corte (segundos)</label><input type="number" min="0" step="0.1" value="0" id="end_at" name="end_at"><p class="small">0 = até o final</p></div>
+</div>
+<label for="cover">🖼️ Adicionar capa (opcional)</label><input id="cover" name="cover" type="file" accept="image/png,image/jpeg,image/webp">
+<p class="small">JPG, PNG ou WebP · a capa aparece nos 2 segundos iniciais do MP4</p>
 <label for="preset">Estilo da edição</label>
 <select id="preset" name="preset"><option value="equilibrado">Profissional equilibrado</option><option value="dinamico">Dinâmico — cores vivas e zoom sutil</option><option value="suave">Suave — acabamento natural</option></select>
+<label for="intensity">✨ Força da melhoria visual: <output id="intensityValue">65%</output></label>
+<input type="range" id="intensity" name="intensity" min="0" max="100" value="65" step="5">
+<p class="small">Aumente para destacar nitidez, contraste e cores (100% mais intenso). Prévia aproximada abaixo.</p>
 <div class="check" style="margin-top:20px"><input id="remove_silence" name="remove_silence" type="checkbox" value="true"><label for="remove_silence">Remover pausas silenciosas longas (opcional)</label></div>
 <label for="music">Música de fundo (opcional)</label><input id="music" name="music" type="file" accept="audio/*">
 <p class="small">A trilha enviada será misturada em volume baixo com a voz. Use músicas autorizadas.</p>
 <button id="go" type="submit">✨ Melhorar vídeo automaticamente</button>
 </form>
 </section>
+<div class="preview-pane">
+<h2>🎬 Prévia do vídeo</h2>
+<video id="localPreview" class="editor-preview" controls playsinline></video>
+<p id="previewInfo" class="small">Selecione um vídeo para visualizar e definir o intervalo de corte.</p>
+<div class="pill">Corte selecionado: <strong id="rangeLabel">Vídeo completo</strong></div>
+<p class="small">A prévia dos efeitos no navegador é uma aproximação. O arquivo final é gerado com FFmpeg.</p>
+<img id="coverPreview" alt="Prévia da capa escolhida" class="hidden" style="width:100%;max-height:160px;object-fit:contain;margin-top:14px;border-radius:10px">
+</div></div>
 <section id="working" class="hidden" aria-live="polite">
 <h2>2. Aplicando melhorias no vídeo</h2><p id="status">Aguardando upload...</p><div class="track"><div id="bar" class="progress-bar"></div></div><strong id="percent">0%</strong>
 </section>
@@ -366,6 +392,41 @@ const form=document.getElementById('form'),go=document.getElementById('go'),work
 const statusEl=document.getElementById('status'),bar=document.getElementById('bar'),pct=document.getElementById('percent');
 const uploadBar=document.getElementById('uploadBar'),uploadPct=document.getElementById('uploadPercent');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const localPreview=document.getElementById('localPreview'),videoInput=document.getElementById('video');
+const startInput=document.getElementById('start_at'),endInput=document.getElementById('end_at');
+let localUrl=null,coverUrl=null;
+function rangeUpdate(){
+ const start=Math.max(0,Number(startInput.value)||0);
+ const end=Number(endInput.value)||localPreview.duration||0;
+ document.getElementById('rangeLabel').textContent=start.toFixed(1)+'s → '+end.toFixed(1)+'s';
+}
+videoInput.addEventListener('change',()=>{
+ if(localUrl)URL.revokeObjectURL(localUrl);
+ const file=videoInput.files[0];if(!file)return;
+ localUrl=URL.createObjectURL(file);localPreview.src=localUrl;
+ document.getElementById('previewInfo').textContent=file.name+' · '+(file.size/1024/1024).toFixed(1)+' MB';
+ startInput.value='0';endInput.value='0';rangeUpdate();
+});
+localPreview.addEventListener('loadedmetadata',()=>{
+ endInput.value=localPreview.duration.toFixed(1);rangeUpdate();
+});
+[startInput,endInput].forEach(input=>input.addEventListener('change',()=>{
+ rangeUpdate();if(input===startInput&&localPreview.readyState>0)localPreview.currentTime=Number(startInput.value)||0;
+}));
+localPreview.addEventListener('timeupdate',()=>{
+ if(Number(endInput.value)>0&&localPreview.currentTime>=Number(endInput.value))localPreview.pause();
+});
+document.getElementById('cover').addEventListener('change',e=>{
+ if(coverUrl)URL.revokeObjectURL(coverUrl);
+ const file=e.target.files[0],img=document.getElementById('coverPreview');
+ if(file){coverUrl=URL.createObjectURL(file);img.src=coverUrl;img.classList.remove('hidden')}
+ else img.classList.add('hidden');
+});
+document.getElementById('intensity').addEventListener('input',e=>{
+ const val=Number(e.target.value);
+ document.getElementById('intensityValue').textContent=val+'%';
+ localPreview.style.filter='contrast('+(1+val*0.0019)+') saturate('+(1+val*0.0038)+') brightness('+(1+val*0.00018)+')';
+});
 function sendWithProgress(payload){
  return new Promise((resolve,reject)=>{
   const xhr=new XMLHttpRequest();
@@ -392,6 +453,9 @@ form.addEventListener('submit',async e=>{
  const selected=document.getElementById('video').files[0];
  if(!selected)return;
  if(selected.size>4*1024*1024*1024){uploadPct.textContent='Arquivo acima do limite de 4 GB.';return}
+ const start=Number(startInput.value)||0,end=Number(endInput.value)||0;
+ if(end>0&&end-start<0.3){statusEl.textContent='Defina um fim de corte posterior ao início.';working.classList.remove('hidden');return}
+ if(localPreview.duration&&start>=localPreview.duration){statusEl.textContent='O início do corte ultrapassa a duração do vídeo.';working.classList.remove('hidden');return}
  go.disabled=true;result.classList.add('hidden');working.classList.remove('hidden');
  statusEl.textContent='Aguardando conclusão do envio...';bar.style.width='0%';pct.textContent='0%';
  uploadBar.style.width='0%';uploadPct.textContent='0% — preparando envio';
