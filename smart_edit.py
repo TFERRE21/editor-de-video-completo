@@ -19,13 +19,11 @@ def detect_scene_cuts(ffmpeg, source, duration, threshold=0.34, max_scenes=18):
     try:
         p = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(source),
                             "-t", str(duration), "-vf",
-                            f"scale=320:-2,scdet=threshold={threshold*100:.1f}",
+                            f"scale=320:-2,select=gt(scene\\,{threshold:.3f}),showinfo",
                             "-an", "-f", "null", "-"], capture_output=True,
                            text=True, timeout=max(60, min(1800, duration*3)))
-        times = [float(x) for x in re.findall(r"lavfi\.scd\.time:\s*([\d.]+)", p.stderr)]
-        if not times:
-            # FFmpeg may print scene detection events with pts_time:
-            times = [float(x) for x in re.findall(r"scdet @.*?pts_time:\s*([\d.]+)", p.stderr)]
+        times = [float(x) for x in re.findall(r"showinfo.*?pts_time:\s*([\d.]+)", p.stderr)]
+
     except (subprocess.TimeoutExpired, ValueError):
         times = []
     points = [0.0]
