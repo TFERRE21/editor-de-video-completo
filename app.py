@@ -8,6 +8,8 @@ import time
 import uuid
 from pathlib import Path
 
+import imageio_ffmpeg
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from starlette.background import BackgroundTask
@@ -22,7 +24,8 @@ try:
 except (OSError, PermissionError):
     DATA = Path("/tmp/editor-video-data")
     DATA.mkdir(parents=True, exist_ok=True)
-MAX_BYTES = 1024 * 1024 * 1024
+MAX_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(4 * 1024 * 1024 * 1024)))
+FFMPEG = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 jobs = {}
@@ -35,26 +38,30 @@ def set_job(job_id, **changes):
 
 
 def run_probe(path):
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_streams", "-show_format",
-         "-of", "json", str(path)], text=True, capture_output=True, timeout=60
+    # FFmpeg é instalado pela dependência imageio-ffmpeg, mesmo em hospedagens
+    # Python que não disponibilizam o executável ffprobe no PATH.
+    result = subprocess.run(
+        [FFMPEG, "-hide_banner", "-nostdin", "-i", str(path), "-f", "null", "-"],
+        text=True, capture_output=True, timeout=90
     )
-    if probe.returncode:
-        raise ValueError("Não foi possível ler o arquivo de vídeo.")
-    info = json.loads(probe.stdout)
-    video = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
-    if not video:
-        raise ValueError("O arquivo enviado não contém vídeo.")
-    duration = float(info.get("format", {}).get("duration") or video.get("duration") or 0)
+    info = result.stderr
+    if not re.search(r"Stream #\\d+:\\d+.*Video:", info):
+        raise ValueError("O arquivo enviado não contém um fluxo de vídeo válido.")
+    duration_match = re.search(r"Duration:\\s*(\\d+):(\\d+):([\\d.]+)", info)
+    if not duration_match:
+        raise ValueError("Não foi possível identificar a duração do vídeo.")
+    h, m, sec = duration_match.groups()
+    duration = int(h) * 3600 + int(m) * 60 + float(sec)
     if duration <= 0:
         raise ValueError("A duração do vídeo é inválida.")
-    return duration, any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+    has_audio = bool(re.search(r"Stream #\\d+:\\d+.*Audio:", info))
+    return duration, has_audio
 
 
 def detect_kept_segments(path, duration):
     """Detect long silences and preserve surrounding speech; return segments or None."""
     p = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-af",
+        [FFMPEG, "-hide_banner", "-nostdin", "-i", str(path), "-af",
          "silencedetect=noise=-36dB:d=1.2", "-vn", "-f", "null", "-"],
         text=True, capture_output=True, timeout=max(120, int(duration * 4))
     )
@@ -111,7 +118,7 @@ def process(job_id, source, music, preset, cuts):
             segments = detect_kept_segments(source, duration)
         vf, af = make_filters(preset, has_audio)
         target = source.parent / "editado.mp4"
-        cmd = ["ffmpeg", "-hide_banner", "-y", "-nostdin", "-loglevel", "error",
+        cmd = [FFMPEG, "-hide_banner", "-y", "-nostdin", "-loglevel", "error",
                "-progress", "pipe:1", "-i", str(source)]
         if music:
             cmd += ["-stream_loop", "-1", "-i", str(music)]
@@ -192,7 +199,7 @@ async def create_job(
             while chunk := await video.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_BYTES:
-                    raise HTTPException(413, "Limite de 1 GB por vídeo.")
+                    raise HTTPException(413, "O vídeo excede o limite configurado de 4 GB.")
                 f.write(chunk)
         if size < 100:
             raise HTTPException(400, "Vídeo vazio.")
@@ -267,7 +274,7 @@ button,.download{border:0;border-radius:12px;padding:16px 24px;background:#7484f
 button:disabled{opacity:.55;cursor:wait}
 .small{font-size:13px;color:#91a3bc}
 .track{height:13px;border-radius:9px;background:#263550;overflow:hidden;margin:18px 0}
-#bar{height:100%;width:0;background:linear-gradient(90deg,#6378ff,#5ad5da);transition:width .3s}
+.progress-bar{height:100%;width:0;background:linear-gradient(90deg,#6378ff,#5ad5da);transition:width .3s}
 #status{overflow-wrap:anywhere}video{display:block;max-width:100%;width:100%;max-height:520px;border-radius:12px;background:black}
 .features{display:flex;gap:10px;flex-wrap:wrap}.features span{padding:9px 13px;border:1px solid #344966;border-radius:99px;color:#b6c8e6}
 .hidden{display:none}footer{text-align:center;color:#8498b5;padding:28px}
@@ -280,7 +287,12 @@ button:disabled{opacity:.55;cursor:wait}
 <section>
 <form id="form">
 <label for="video">Vídeo original *</label><input id="video" name="video" type="file" accept="video/*,.mkv,.avi" required>
-<p class="small">MP4, MOV, MKV, AVI ou WebM · até 1 GB</p>
+<p class="small">MP4, MOV, MKV, AVI ou WebM · até 4 GB (sujeito ao limite da hospedagem)</p>
+<div id="uploadStatus" aria-live="polite" style="margin:12px 0 22px">
+<strong>1. Envio do vídeo para a plataforma</strong>
+<div class="track" role="progressbar" aria-label="Envio do arquivo"><div id="uploadBar" class="progress-bar"></div></div>
+<span id="uploadPercent">0% — aguardando envio</span>
+</div>
 <label for="preset">Estilo da edição</label>
 <select id="preset" name="preset"><option value="equilibrado">Profissional equilibrado</option><option value="dinamico">Dinâmico — cores vivas e zoom sutil</option><option value="suave">Suave — acabamento natural</option></select>
 <div class="check" style="margin-top:20px"><input id="remove_silence" name="remove_silence" type="checkbox" value="true"><label for="remove_silence">Remover pausas silenciosas longas (opcional)</label></div>
@@ -290,24 +302,60 @@ button:disabled{opacity:.55;cursor:wait}
 </form>
 </section>
 <section id="working" class="hidden" aria-live="polite">
-<h2>Processando edição</h2><p id="status">Preparando...</p><div class="track"><div id="bar"></div></div><strong id="percent">0%</strong>
+<h2>2. Aplicando melhorias no vídeo</h2><p id="status">Aguardando upload...</p><div class="track"><div id="bar" class="progress-bar"></div></div><strong id="percent">0%</strong>
 </section>
 <section id="result" class="hidden"><h2>Vídeo finalizado ✓</h2><video id="preview" controls playsinline></video><a class="download" id="download">⬇ Baixar MP4 editado</a></section>
 </main><footer>Processamento de vídeo com FFmpeg · Seu arquivo não é enviado a serviços externos de IA</footer>
 <script>
 const form=document.getElementById('form'),go=document.getElementById('go'),working=document.getElementById('working'),result=document.getElementById('result');
 const statusEl=document.getElementById('status'),bar=document.getElementById('bar'),pct=document.getElementById('percent');
+const uploadBar=document.getElementById('uploadBar'),uploadPct=document.getElementById('uploadPercent');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function sendWithProgress(payload){
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/jobs');
+  xhr.upload.onprogress=e=>{
+   if(e.lengthComputable){
+    const val=Math.min(99,Math.round(e.loaded*100/e.total));
+    uploadBar.style.width=val+'%';
+    uploadPct.textContent=val+'% — enviando arquivo';
+   }else{uploadPct.textContent='Enviando vídeo...';}
+  };
+  xhr.onload=()=>{
+   let data;try{data=JSON.parse(xhr.responseText)}catch{data={}}
+   if(xhr.status>=200&&xhr.status<300){uploadBar.style.width='100%';uploadPct.textContent='100% — envio concluído';resolve(data)}
+   else reject(Error(typeof data.detail==='string'?data.detail:'Falha no upload (HTTP '+xhr.status+'). Verifique o limite da hospedagem.'));
+  };
+  xhr.onerror=()=>reject(Error('Falha na conexão durante o upload.'));
+  xhr.onabort=()=>reject(Error('Envio cancelado.'));
+  xhr.send(payload);
+ });
+}
 form.addEventListener('submit',async e=>{
- e.preventDefault();go.disabled=true;result.classList.add('hidden');working.classList.remove('hidden');statusEl.textContent='Enviando arquivo...';bar.style.width='0%';pct.textContent='0%';
+ e.preventDefault();
+ const selected=document.getElementById('video').files[0];
+ if(!selected)return;
+ if(selected.size>4*1024*1024*1024){uploadPct.textContent='Arquivo acima do limite de 4 GB.';return}
+ go.disabled=true;result.classList.add('hidden');working.classList.remove('hidden');
+ statusEl.textContent='Aguardando conclusão do envio...';bar.style.width='0%';pct.textContent='0%';
+ uploadBar.style.width='0%';uploadPct.textContent='0% — preparando envio';
  try{
-  const payload=new FormData(form);if(!document.getElementById('remove_silence').checked)payload.delete('remove_silence');
-  const res=await fetch('/api/jobs',{method:'POST',body:payload});const data=await res.json();if(!res.ok)throw Error(data.detail||'Falha ao enviar');
+  const payload=new FormData(form);
+  if(!document.getElementById('remove_silence').checked)payload.delete('remove_silence');
+  const data=await sendWithProgress(payload);
+  statusEl.textContent='Arquivo recebido. Iniciando melhorias...';
   for(;;){
-   const r=await fetch('/api/jobs/'+data.id);if(!r.ok)throw Error('Não foi possível consultar o processamento.');
-   const j=await r.json();statusEl.textContent=j.message;bar.style.width=j.progress+'%';pct.textContent=j.progress+'%';
+   const r=await fetch('/api/jobs/'+data.id,{cache:'no-store'});
+   if(!r.ok)throw Error('Não foi possível consultar o processamento.');
+   const j=await r.json();
+   statusEl.textContent=j.message;bar.style.width=j.progress+'%';pct.textContent=j.progress+'%';
    if(j.state==='erro')throw Error(j.message);
-   if(j.state==='concluido'){const url=j.video;document.getElementById('preview').src=url;document.getElementById('download').href=url;result.classList.remove('hidden');break}
+   if(j.state==='concluido'){
+    document.getElementById('preview').src=j.video;
+    document.getElementById('download').href=j.video;
+    result.classList.remove('hidden');break;
+   }
    await sleep(1200);
   }
  }catch(err){statusEl.textContent='Erro: '+err.message}
