@@ -41,20 +41,20 @@ def run_probe(path):
     # FFmpeg é instalado pela dependência imageio-ffmpeg, mesmo em hospedagens
     # Python que não disponibilizam o executável ffprobe no PATH.
     result = subprocess.run(
-        [FFMPEG, "-hide_banner", "-nostdin", "-i", str(path), "-f", "null", "-"],
+        [FFMPEG, "-hide_banner", "-nostdin", "-i", str(path), "-t", "0.01", "-f", "null", "-"],
         text=True, capture_output=True, timeout=90
     )
     info = result.stderr
-    if not re.search(r"Stream #\\d+:\\d+.*Video:", info):
+    if not re.search(r"Stream #\d+:\d+.*Video:", info):
         raise ValueError("O arquivo enviado não contém um fluxo de vídeo válido.")
-    duration_match = re.search(r"Duration:\\s*(\\d+):(\\d+):([\\d.]+)", info)
+    duration_match = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", info)
     if not duration_match:
         raise ValueError("Não foi possível identificar a duração do vídeo.")
     h, m, sec = duration_match.groups()
     duration = int(h) * 3600 + int(m) * 60 + float(sec)
     if duration <= 0:
         raise ValueError("A duração do vídeo é inválida.")
-    has_audio = bool(re.search(r"Stream #\\d+:\\d+.*Audio:", info))
+    has_audio = bool(re.search(r"Stream #\d+:\d+.*Audio:", info))
     return duration, has_audio
 
 
