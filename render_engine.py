@@ -170,8 +170,9 @@ def render(ffmpeg, source, music, cover, output, scenes, duration, has_audio,
     if music:
         filters.append(f"[1:a]volume={clamp(float(music_gain),0,0.8):.3f},aresample=48000[music]")
         if has_audio:
-            filters.append("[music][voice]sidechaincompress=threshold=0.05:ratio=5:attack=40:release=350[ducked]")
-            filters.append("[voice][ducked]amix=inputs=2:duration=first:dropout_transition=1[outa]")
+            filters.append("[voice]asplit=2[voiceMix][voiceSide]")
+            filters.append("[music][voiceSide]sidechaincompress=threshold=0.05:ratio=5:attack=40:release=350[ducked]")
+            filters.append("[voiceMix][ducked]amix=inputs=2:duration=first:dropout_transition=1[outa]")
         else:
             filters.append("[music]anull[outa]")
     elif has_audio:
