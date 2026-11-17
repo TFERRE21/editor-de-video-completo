@@ -357,10 +357,22 @@ input[type=range]{accent-color:#7484ff}
 <p class="small">JPG, PNG ou WebP · a capa aparece nos 2 segundos iniciais do MP4</p>
 <div style="border-top:1px solid #344966;margin:22px 0 14px;padding-top:14px"><h2>🎞️ Linha do tempo por cenas</h2>
 <p class="small">Adicione até 30 trechos. Você pode dar a cada um cor, zoom e velocidade diferentes. Trechos são reproduzidos na ordem da lista.</p>
+<div class="controls">
+<div><label for="directorStyle">🎥 Estilo automático</label><select id="directorStyle">
+<option value="social">Redes sociais — ritmo dinâmico</option>
+<option value="cinema">Cinema — cortes suaves</option>
+<option value="igreja">Igreja — edição respeitosa</option>
+<option value="aula">Aula — foco na explicação</option>
+<option value="natural">Natural — mínimo de alterações</option>
+</select></div>
+<div style="display:flex;align-items:end"><button type="button" id="autoDirector" style="width:100%;background:#596de0">✨ Diretor Automático</button></div></div>
+<p class="small" id="directorStatus">Analisa mudanças visuais e pausas para sugerir trechos. Arquivos até 500 MB.</p>
 <div id="sceneList"></div>
 <div class="controls">
 <button type="button" id="addScene" style="margin-top:10px;background:#32466e">+ Adicionar trecho</button>
 <button type="button" id="clearScenes" style="margin-top:10px;background:#28364f">Usar vídeo inteiro</button>
+<button type="button" id="saveProject" style="margin-top:10px;background:#264d55">💾 Salvar ajustes</button>
+<button type="button" id="loadProject" style="margin-top:10px;background:#264d55">↶ Abrir ajustes salvos</button>
 </div><p class="small" id="sceneSummary">Sem cortes por cenas: o vídeo inteiro será usado.</p></div>
 <input type="hidden" name="scenes_json" id="scenes_json">
 <label for="preset">Estilo da edição</label>
@@ -414,6 +426,8 @@ function drawScenes(){
  sceneList.innerHTML=scenes.map((sc,i)=>`
  <div class="scene" data-i="${i}">
   <div class="scene-head"><h3>🎬 Trecho ${i+1}</h3><div><button type="button" data-action="preview" data-i="${i}" style="background:#415e8a">▶ Ver início</button>
+  <button type="button" data-action="up" data-i="${i}" style="background:#334967" title="Subir trecho">↑</button>
+  <button type="button" data-action="down" data-i="${i}" style="background:#334967" title="Descer trecho">↓</button>
   <button type="button" data-action="delete" data-i="${i}" style="background:#603d4b">Excluir</button></div></div>
   <div class="scene-cols">
    <div><label>Início (s)</label><input type="number" min="0" step="0.1" data-key="start" data-i="${i}" value="${sc.start}"></div>
@@ -423,6 +437,9 @@ function drawScenes(){
    </select></div>
    <div><label>Aproximação</label><select data-key="zoom" data-i="${i}">
     ${[['nenhum','Sem zoom'],['leve','Zoom leve'],['proximo','Zoom próximo']].map(([v,t])=>'<option value="'+v+'" '+(v===sc.zoom?'selected':'')+'>'+t+'</option>').join('')}
+   </select></div>
+   <div><label>Transição</label><select data-key="transition" data-i="${i}">
+    ${[['cut','Corte seco'],['fade','Fade para preto']].map(([v,t])=>'<option value="'+v+'" '+(v===(sc.transition||'cut')?'selected':'')+'>'+t+'</option>').join('')}
    </select></div>
    <div><label>Velocidade</label><select data-key="speed" data-i="${i}">
     ${[['0.5','0,5x — lento'],['0.75','0,75x'],['1','1x — normal'],['1.25','1,25x'],['1.5','1,5x'],['2','2x — rápido']].map(([v,t])=>'<option value="'+v+'" '+(Number(v)===Number(sc.speed)?'selected':'')+'>'+t+'</option>').join('')}
@@ -444,11 +461,50 @@ document.getElementById('addScene').addEventListener('click',()=>{
  drawScenes();
 });
 document.getElementById('clearScenes').addEventListener('click',()=>{scenes=[];drawScenes()});
+document.getElementById('autoDirector').addEventListener('click',async()=>{
+ const file=document.getElementById('video').files[0];
+ const el=document.getElementById('directorStatus'),btn=document.getElementById('autoDirector');
+ if(!file){el.textContent='Selecione um vídeo primeiro.';return}
+ if(file.size>500*1024*1024){el.textContent='Para arquivos maiores que 500 MB, use cortes manuais.';return}
+ btn.disabled=true;el.textContent='Analisando cenas e pausas na plataforma...';
+ try{
+  const p=new FormData();p.append('video',file);p.append('style',document.getElementById('directorStyle').value);
+  const res=await fetch('/api/auto-plan',{method:'POST',body:p});
+  const json=await res.json();
+  if(!res.ok)throw Error(typeof json.detail==='string'?json.detail:'Falha na análise automática');
+  scenes=json.scenes;drawScenes();
+  el.textContent=scenes.length+' cenas sugeridas. Revise os cortes antes de exportar.';
+ }catch(e){el.textContent='Erro na análise: '+e.message}
+ finally{btn.disabled=false}
+});
+const STORAGE_KEY='editor-video-projeto-v2';
+document.getElementById('saveProject').addEventListener('click',()=>{
+ const keys=['start_at','end_at','preset','intensity','audio_mode','voice_gain','music_gain','output_format','remove_silence','directorStyle'];
+ const options={};for(const id of keys){const el=document.getElementById(id);options[id]=el.type==='checkbox'?el.checked:el.value}
+ try{localStorage.setItem(STORAGE_KEY,JSON.stringify({version:2,scenes,options}));
+ document.getElementById('directorStatus').textContent='Ajustes salvos neste navegador. Arquivos de vídeo e música não são armazenados.'}
+ catch(e){document.getElementById('directorStatus').textContent='Não foi possível salvar no navegador: '+e.message}
+});
+document.getElementById('loadProject').addEventListener('click',()=>{
+ try{
+  const data=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');
+  if(!data){alert('Nenhum projeto salvo neste navegador.');return}
+  scenes=Array.isArray(data.scenes)?data.scenes.slice(0,30):[];
+  for(const [id,val] of Object.entries(data.options||{})){
+   const el=document.getElementById(id);if(!el)continue;
+   if(el.type==='checkbox')el.checked=Boolean(val);else el.value=val;
+  }
+  drawScenes();rangeUpdate();
+  document.getElementById('directorStatus').textContent='Ajustes restaurados. Selecione novamente os arquivos de mídia.';
+ }catch(e){alert('Não foi possível abrir o projeto: '+e.message)}
+});
 sceneList.addEventListener('click',e=>{
  const btn=e.target.closest('button[data-action]');if(!btn)return;
  const i=Number(btn.dataset.i);
  if(btn.dataset.action==='delete'){scenes.splice(i,1);drawScenes()}
- else if(localPreview.readyState>0){localPreview.currentTime=scenes[i].start;localPreview.play().catch(()=>{})}
+ else if(btn.dataset.action==='up'&&i>0){[scenes[i-1],scenes[i]]=[scenes[i],scenes[i-1]];drawScenes()}
+ else if(btn.dataset.action==='down'&&i<scenes.length-1){[scenes[i+1],scenes[i]]=[scenes[i],scenes[i+1]];drawScenes()}
+ else if(btn.dataset.action==='preview'&&localPreview.readyState>0){localPreview.currentTime=scenes[i].start;localPreview.play().catch(()=>{})}
 });
 sceneList.addEventListener('change',e=>{
  const el=e.target;if(!el.dataset.key)return;
