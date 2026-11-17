@@ -88,6 +88,11 @@ def automatic_plan(ffmpeg, source, duration, has_audio, style="social"):
                            "transition":"fade" if i>0 and style in {"cinema","igreja"} else "cut"})
             if len(scenes)>=30:break
         if len(scenes)>=30:break
+    # Nunca descartar silenciosamente a parte do vídeo além da janela de análise.
+    if duration > 1800 and len(scenes) < 30:
+        scenes.append({"start":1800.0,"end":float(duration),"look":"natural",
+                       "zoom":"nenhum","speed":1,"transition":"cut",
+                       "label":"Continuação (fora da análise)"})
     if not scenes:
         scenes=[{"start":0,"end":duration,"look":"natural","zoom":"nenhum",
                  "speed":1,"transition":"cut","label":"Vídeo completo"}]
