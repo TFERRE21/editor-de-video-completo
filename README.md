@@ -1,41 +1,39 @@
-# Editor de Vídeo Automático
+# Editor de Vídeo Automático — edição por cenas
 
-Aplicação web para enviar um vídeo e receber uma versão editada automaticamente, com processamento real via FFmpeg.
+Aplicação web em Python/FastAPI e FFmpeg. Envie seu vídeo e crie uma edição com ajustes diferentes por trecho, controles de áudio, efeitos de imagem, cortes, capa e exportação MP4.
 
-## Recursos
-- Upload de MP4, MOV, MKV ou WebM (até 1 GB)
-- Presets: equilibrado, dinâmico e suave
-- Prévia local do vídeo, corte com início e fim em segundos
-- Envio de capa JPG/PNG/WebP aplicada aos 2 segundos iniciais
-- Controle ajustável de intensidade dos efeitos de imagem (0 a 100%)
-- Correção de contraste, saturação, brilho e nitidez
-- Redução de ruído visual
-- Redução de ruído do áudio, compressão e normalização de volume
-- Zoom sutil e movimento de enquadramento no preset dinâmico
-- Remoção opcional de pausas silenciosas longas (quando há áudio)
-- Música de fundo opcional, enviada pelo usuário
-- Progresso real, visualização e download em MP4 H.264/AAC
+## Ferramentas disponíveis
+- Upload de vídeo de até **4 GB na aplicação** (pode haver limite inferior do proxy da hospedagem).
+- Barra de upload e barra de renderização, independentes.
+- Prévia local e seleção de intervalo inicial/final.
+- **Linha do tempo por trechos:** até 30 cenas na sequência escolhida; cada trecho recebe início/fim próprios, look, zoom e velocidade.
+- Looks: **natural, cinema, vibrante, quente, frio e preto e branco**; intensidade de cor e nitidez ajustável.
+- Zoom leve ou próximo por cena.
+- Velocidade de reprodução de **0,5x a 2x** por trecho.
+- Áudio original, limpeza equilibrada ou modo voz destacada; redução de ruído, compressor e normalização.
+- Volume individual de voz e música de fundo opcional.
+- Imagem de capa nos dois primeiros segundos.
+- Formato HD horizontal, vertical e quadrado.
+- Remoção opcional de pausas longas no modo sem cenas manuais.
+- Download MP4 H.264/AAC.
 
-## Iniciar com Docker
+## Executar via iContainer (Python)
 
-\`\`\`bash
-docker compose up --build -d
-\`\`\`
+Aponte a aplicação para o arquivo **app.py** e instale `requirements.txt`. O arquivo inclui o inicializador Uvicorn e o executável FFmpeg é instalado via `imageio-ffmpeg`, dispensando `ffprobe` do sistema.
 
-Abra http://localhost:8080.
+Em caso de uso local ou VPS:
 
-## Instalação manual
+```bash
+docker compose up -d --build
+```
 
-Requer Python 3.11+, FFmpeg e FFprobe no PATH.
+Abrir porta 8080 (ou a variável de ambiente `PORT`).
 
-\`\`\`bash
-pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8080
-\`\`\`
-
-## Observações
-- O motor usa filtros determinísticos FFmpeg; **não** faz reconstrução generativa de imagens, transcrição ou análise semântica por IA nesta versão.
-- O zoom aplicado é sutil; não há detecção automática de rostos.
-- Música só é adicionada quando fornecida pelo usuário; use trilhas com direitos adequados.
-- Arquivos são mantidos em \`/data\` (volume Docker). Não publique na internet sem autenticação, limite de usuários e política de retenção.
-- A duração e a carga de renderização dependem do vídeo e da CPU disponível.
+## Limitações importantes
+- **Não é o CapCut:** não há editor drag-and-drop, multicamadas, animação de textos, detecção de rostos, legendas automáticas nem reconstrução generativa de qualidade. Os controles são FFmpeg e a prévia dos filtros do navegador é aproximada.
+- A intensidade é baseada em ajustes fixos de nitidez/cor, que podem não beneficiar todos os materiais. A limpeza de ruído pode alterar a voz dependendo da gravação.
+- A hospedagem precisa de memória, CPU, disco e limites de proxy compatíveis com o tamanho e a duração do arquivo. Projetos maiores exigem mais processamento.
+- O progresso é informado pelo FFmpeg e não é uma previsão de tempo restante.
+- O estado das tarefas fica na memória do processo; um restart durante a renderização interrompe o trabalho.
+- Não exponha a aplicação pública sem autenticação, controle de uso, limite de armazenamento e política de exclusão dos vídeos.
+- Use apenas músicas e imagens com os direitos necessários.
