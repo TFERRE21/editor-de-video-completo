@@ -34,6 +34,25 @@ AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 jobs = {}
 lock = threading.Lock()
+RENDER_CONCURRENCY = max(1, min(4, int(os.getenv("MAX_PARALLEL_RENDERS", "1"))))
+RENDER_SLOTS = threading.BoundedSemaphore(RENDER_CONCURRENCY)
+KEEP_DAYS = max(1, min(365, int(os.getenv("EDITOR_KEEP_DAYS", "7"))))
+
+
+def prune_old_files():
+    cutoff = time.time() - KEEP_DAYS * 86400
+    with lock:
+        active = {k for k,v in jobs.items()
+                  if v.get("state") in {"na_fila","analisando","processando"}}
+    try:
+        for folder in DATA.iterdir():
+            if not folder.is_dir() or folder.name in active:
+                continue
+            if folder.stat().st_mtime < cutoff:
+                shutil.rmtree(folder, ignore_errors=True)
+    except OSError:
+        pass
+
 
 
 def set_job(job_id, **changes):
@@ -122,7 +141,14 @@ def make_filters(preset, has_audio, intensity=65):
     return v, a if has_audio else None
 
 
-def process(job_id, source, music, cover, preset, cuts, start_at, end_at, intensity,
+def process(*args):
+    job_id = args[0]
+    set_job(job_id, message="Aguardando vaga para renderização", state="na_fila")
+    with RENDER_SLOTS:
+        return _process_unlocked(*args)
+
+
+def _process_unlocked(job_id, source, music, cover, preset, cuts, start_at, end_at, intensity,
             scenes_json, audio_mode, voice_gain, music_gain, output_format):
     try:
         set_job(job_id, state="analisando", message="Analisando duração, cenas e faixas de áudio", progress=2)
@@ -264,6 +290,7 @@ async def create_job(
         raise HTTPException(400, "Volumes fora da faixa permitida.")
     if not 0 <= intensity <= 100 or start_at < 0 or end_at < 0:
         raise HTTPException(400, "Parâmetros de edição inválidos.")
+    await __import__("asyncio").to_thread(prune_old_files)
     job_id = uuid.uuid4().hex
     folder = DATA / job_id
     folder.mkdir(mode=0o700)
