@@ -32,7 +32,7 @@ jobs:
           python - <<'PY'
           import shutil
           from pathlib import Path
-          from render_engine import render,parse_scenes
+          from render_engine import render,parse_scenes,audio_filters
           scenes = parse_scenes('[{"start":0,"end":1.3,"look":"cinema","zoom":"leve","speed":1},{"start":1.3,"end":2.7,"look":"vibrante","zoom":"nenhum","speed":1.25}]',3,0,3,"natural")
           render(shutil.which('ffmpeg'), Path('/tmp/original.mp4'), None, Path('/tmp/capa.png'),
                  Path('/tmp/editado.mp4'), scenes,3,True,80,'voz',1.0,0.1,'horizontal',lambda n: None)
@@ -46,5 +46,13 @@ jobs:
           render(shutil.which('ffmpeg'),Path('/tmp/original.mp4'),Path('/tmp/musica.m4a'),Path('/tmp/capa.png'),
                  Path('/tmp/com-musica.mp4'),second,3,True,80,'voz',1,0.12,'vertical',lambda n: None)
           assert Path('/tmp/com-musica.mp4').stat().st_size > 1000
+          for mode in ('estudio','podcast','forte','limpo','voz','original'):
+              filt=audio_filters(mode,1.0,bass=3,treble=2,noise=70,gate=True)
+              assert 'equalizer' in filt
+              print('Áudio',mode,':',filt)
+          render(shutil.which('ffmpeg'),Path('/tmp/original.mp4'),None,None,
+                 Path('/tmp/previa-audio.mp4'),second[:1],3,True,85,'podcast',1.0,0.1,'horizontal',
+                 lambda n: None,bass=4,treble=3,noise=80,gate=True)
+          assert Path('/tmp/previa-audio.mp4').stat().st_size > 1000
           print('Renderização multicenas concluída:',Path('/tmp/editado.mp4').stat().st_size)
           PY
