@@ -1,39 +1,49 @@
-# Editor de Vídeo Automático — edição por cenas
+# Editor de Vídeo Automático — Estúdio
 
-Aplicação web em Python/FastAPI e FFmpeg. Envie seu vídeo e crie uma edição com ajustes diferentes por trecho, controles de áudio, efeitos de imagem, cortes, capa e exportação MP4.
+Editor de vídeo web, com tratamento por trecho, prévia e modo Diretor Automático. Backend FastAPI/Python e FFmpeg.
 
-## Ferramentas disponíveis
-- Upload de vídeo de até **4 GB na aplicação** (pode haver limite inferior do proxy da hospedagem).
-- Barra de upload e barra de renderização, independentes.
-- Prévia local e seleção de intervalo inicial/final.
-- **Linha do tempo por trechos:** até 30 cenas na sequência escolhida; cada trecho recebe início/fim próprios, look, zoom e velocidade.
-- Looks: **natural, cinema, vibrante, quente, frio e preto e branco**; intensidade de cor e nitidez ajustável.
-- Zoom leve ou próximo por cena.
-- Velocidade de reprodução de **0,5x a 2x** por trecho.
-- Áudio original, limpeza equilibrada ou modo voz destacada; redução de ruído, compressor e normalização.
-- Volume individual de voz e música de fundo opcional.
-- Imagem de capa nos dois primeiros segundos.
-- Formato HD horizontal, vertical e quadrado.
-- Remoção opcional de pausas longas no modo sem cenas manuais.
-- Download MP4 H.264/AAC.
+## Novidades implementadas no código
 
-## Executar via iContainer (Python)
+- **Diretor Automático**: detecta mudanças visuais e silêncios com FFmpeg (sem IA semântica), gera até 30 cenas e sugere estilos conforme perfil **Redes sociais**, **Cinema**, **Igreja**, **Aula** ou **Natural**.
+- **Linha do tempo de cenas**: início/fim, reordenação por arrastar, botões ↑ e ↓, zoom, cor, velocidade 0,5–2x e transição fade por cena.
+- **Tratamento visual**: estilos natural, cinema, vibrante, quente, frio e P&B; intensidade ajustável, zoom e diferentes proporções de exportação.
+- **Áudio**: redução de ruído baseada em filtros, compressor, equalização básica por passa-altas/baixas, normalização, volumes separados e *ducking* para baixar a música enquanto a pessoa fala.
+- **Capas**: imagem enviada pelo usuário ou quadro capturado do vídeo em reprodução.
+- **Prévia**: comparar tratamento visual aproximado e imagem original, antes de renderizar.
+- **Projetos**: salvar/carregar os parâmetros no navegador (localStorage). Arquivos de vídeo não são salvos no navegador; precisam ser selecionados novamente.
+- **Legendas SRT**: transcrição **opcional** usando `faster-whisper` local, arquivo SRT com grupos de até cinco palavras. Não há queima automática de legendas no vídeo nesta versão.
+- Upload com barra de progresso separado da renderização e download de MP4.
 
-Aponte a aplicação para o arquivo **app.py** e instale `requirements.txt`. O arquivo inclui o inicializador Uvicorn e o executável FFmpeg é instalado via `imageio-ffmpeg`, dispensando `ffprobe` do sistema.
+## Hospedagem na iContainer — Python
 
-Em caso de uso local ou VPS:
+Instale `requirements.txt`, use `app.py` como comando de inicialização. Ele inicia Uvicorn na porta configurada por `PORT`, padrão 8080. FFmpeg é disponibilizado por `imageio-ffmpeg` quando não existe no PATH.
+
+Para habilitar transcrição local, instale também:
 
 ```bash
-docker compose up -d --build
+pip install -r requirements-ai.txt
 ```
 
-Abrir porta 8080 (ou a variável de ambiente `PORT`).
+Os modelos Whisper são baixados no primeiro uso. Requer CPU/RAM/espaço e acesso à rede para obter o modelo; para vídeos longos use um worker com GPU ou recursos dedicados. Por padrão, a edição funciona sem instalar esse pacote.
 
-## Limitações importantes
-- **Não é o CapCut:** não há editor drag-and-drop, multicamadas, animação de textos, detecção de rostos, legendas automáticas nem reconstrução generativa de qualidade. Os controles são FFmpeg e a prévia dos filtros do navegador é aproximada.
-- A intensidade é baseada em ajustes fixos de nitidez/cor, que podem não beneficiar todos os materiais. A limpeza de ruído pode alterar a voz dependendo da gravação.
-- A hospedagem precisa de memória, CPU, disco e limites de proxy compatíveis com o tamanho e a duração do arquivo. Projetos maiores exigem mais processamento.
-- O progresso é informado pelo FFmpeg e não é uma previsão de tempo restante.
-- O estado das tarefas fica na memória do processo; um restart durante a renderização interrompe o trabalho.
-- Não exponha a aplicação pública sem autenticação, controle de uso, limite de armazenamento e política de exclusão dos vídeos.
-- Use apenas músicas e imagens com os direitos necessários.
+Com Docker:
+
+```bash
+docker compose up --build -d
+```
+
+A análise automática tem limite de **500 MB por envio**, a transcrição de **400 MB** e o upload normal de **4 GB**, sujeito a restrições do proxy, disco e memória da hospedagem. A análise examina até os primeiros 30 minutos; confirme os cortes propostos antes de renderizar.
+
+## Segurança e limitações
+
+- **Não é equivalente ao CapCut.** Não implementa editor multicamadas completo, legendas já gravadas no MP4, estabilização neural, enquadramento por rosto, remoção de fundo, super-resolução ou detecção semântica de "melhores momentos". São melhorias futuras e podem exigir modelos e GPU.
+- A prévia no navegador é apenas aproximada; o render final depende do FFmpeg e da resolução do vídeo original.
+- O modo automático é baseado em detecção de cenas e pausas, não interpreta o roteiro ou o conteúdo visual como um humano.
+- O estado das tarefas permanece em memória e a renderização em thread é interrompida se o aplicativo reiniciar. Para ambiente multiusuário, usar fila durável e autenticação.
+- Não publique na internet sem autenticação, limite de armazenamento, limpeza de arquivos antigos e quotas. Não há limpezas automatizadas nem isolamento entre usuários nesta versão.
+- Música, vídeo e imagens precisam de direitos adequados.
+- Caso a exportação falhe, verifique os logs e o suporte de filtros do binário FFmpeg utilizado no servidor.
+
+## Validação
+
+Existe workflow `.github/workflows/render-tests.yml` para testar sintaxe e renderização sintética. A presença do arquivo não significa que os testes já tenham passado: verifique a aba **Actions** no GitHub e faça um teste de vídeo curto na iContainer após sincronizar.
