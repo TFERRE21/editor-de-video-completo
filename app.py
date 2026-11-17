@@ -387,7 +387,7 @@ input[type=range]{accent-color:#7484ff}
 <main>
 <h1>Estúdio de edição de vídeo</h1>
 <p>Prévia do material, corte por tempo, capa, filtros, zoom e melhoria automática — com controles inspirados em editores como o CapCut.</p>
-<div class="features"><span>✓ Cor e nitidez</span><span>✓ Voz mais clara</span><span>✓ Zoom dinâmico</span><span>✓ Cortes de pausas</span><span>✓ MP4 pronto</span></div>
+<div class="features"><span>✓ Cor e nitidez</span><span>✓ Diretor automático</span><span>✓ Transições por cena</span><span>✓ Voz mais clara</span><span>✓ Zoom dinâmico</span><span>✓ Cortes de pausas</span><span>✓ MP4 pronto</span></div>
 <div class="editor-grid"><section>
 <form id="form">
 <label for="video">Vídeo original *</label><input id="video" name="video" type="file" accept="video/*,.mkv,.avi" required>
@@ -455,6 +455,13 @@ input[type=range]{accent-color:#7484ff}
 <p id="previewInfo" class="small">Selecione um vídeo para visualizar e definir o intervalo de corte.</p>
 <div class="pill">Corte selecionado: <strong id="rangeLabel">Vídeo completo</strong></div>
 <p class="small">Use o vídeo à esquerda para conferir o corte. Selecionar um trecho na linha do tempo move a reprodução para o início dele. O filtro da prévia é aproximado; a renderização aplica os efeitos de cada trecho.</p>
+<div style="margin-top:24px;padding-top:12px;border-top:1px solid #344966">
+<h2>💬 Legendas automáticas</h2>
+<p class="small">Transcrição local em português para SRT. Requer instalar o módulo opcional de IA no servidor. Legendas são geradas com base no vídeo original.</p>
+<button type="button" id="makeCaptions" style="width:100%;background:#33486f">Gerar legendas SRT do vídeo</button>
+<p id="captionStatus" class="small">Selecione um vídeo para gerar legendas.</p>
+<a id="captionDownload" class="download hidden" download="legendas.srt">Baixar legendas .SRT</a>
+</div>
 <img id="coverPreview" alt="Prévia da capa escolhida" class="hidden" style="width:100%;max-height:160px;object-fit:contain;margin-top:14px;border-radius:10px">
 </div></div>
 <section id="working" class="hidden" aria-live="polite">
@@ -467,6 +474,31 @@ const form=document.getElementById('form'),go=document.getElementById('go'),work
 const statusEl=document.getElementById('status'),bar=document.getElementById('bar'),pct=document.getElementById('percent');
 const uploadBar=document.getElementById('uploadBar'),uploadPct=document.getElementById('uploadPercent');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+document.getElementById('makeCaptions').addEventListener('click',async()=>{
+ const file=document.getElementById('video').files[0];
+ const status=document.getElementById('captionStatus'),btn=document.getElementById('makeCaptions');
+ if(!file){status.textContent='Selecione o vídeo primeiro.';return}
+ if(file.size>400*1024*1024){status.textContent='A transcrição aceita até 400 MB.';return}
+ btn.disabled=true;status.textContent='Enviando vídeo para transcrição...';
+ try{
+  const data=new FormData();data.append('video',file);
+  const r=await fetch('/api/captions',{method:'POST',body:data}),v=await r.json();
+  if(!r.ok)throw Error(v.detail||'Falha ao iniciar');
+  for(;;){
+   await sleep(1500);
+   const response=await fetch('/api/jobs/'+v.id,{cache:'no-store'});
+   if(!response.ok)throw Error('Não foi possível acompanhar a transcrição.');
+   const task=await response.json();
+   status.textContent=task.message;
+   if(task.state==='erro')throw Error(task.message);
+   if(task.state==='concluido'){
+    const link=document.getElementById('captionDownload');link.href=task.subtitles;
+    link.classList.remove('hidden');break;
+   }
+  }
+ }catch(e){status.textContent='Transcrição indisponível: '+e.message}
+ finally{btn.disabled=false}
+});
 const sceneList=document.getElementById('sceneList');
 let scenes=[];
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
