@@ -521,6 +521,9 @@ input[type=range]{accent-color:#7484ff}
 <option value="vertical">Vertical 9:16 — Reels / Shorts</option>
 <option value="horizontal">Horizontal 16:9 — YouTube</option>
 <option value="quadrado">Quadrado 1:1 — Feed</option></select>
+<label for="subtitle_file">💬 Incluir legendas SRT no MP4 (opcional)</label>
+<input type="file" name="subtitle_file" id="subtitle_file" accept=".srt">
+<p class="small">Legendas selecionáveis no player, não gravadas sobre a imagem. Use marcações de tempo relativas ao vídeo final; após cortes, a SRT original pode perder sincronização.</p>
 <label for="music">Música de fundo (opcional)</label><input id="music" name="music" type="file" accept="audio/*">
 <p class="small">A trilha enviada será misturada em volume baixo com a voz. Use músicas autorizadas.</p>
 <button id="go" type="submit">✨ Melhorar vídeo automaticamente</button>
