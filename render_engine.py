@@ -103,21 +103,57 @@ def video_filters(look, zoom, intensity, output_format):
     return ",".join(filters)
 
 
-def audio_filters(mode, gain):
+def audio_filters(mode, gain, bass=0, treble=0, noise=50, gate=False):
+    """Processa áudio com EQ real e redução de ruído ajustável.
+    Modos variam bastante para permitir comparação auditiva.
+    """
     gain = clamp(float(gain), 0, 2)
+    bass = clamp(float(bass), -12, 12)
+    treble = clamp(float(treble), -12, 12)
+    noise = clamp(float(noise), 0, 100)
+    if mode not in {"original", "limpo", "voz", "estudio", "podcast", "forte"}:
+        raise ValueError("Modo de áudio inválido.")
     if mode == "original":
-        return f"volume={gain:.3f}"
-    if mode == "voz":
-        return (f"highpass=f=90,lowpass=f=10500,afftdn=nf=-28,"
-                f"acompressor=threshold=-25dB:ratio=3.6:attack=10:release=170,"
-                f"volume={gain:.3f},loudnorm=I=-16:TP=-1.5:LRA=9")
-    return (f"highpass=f=65,lowpass=f=15500,afftdn=nf=-24,"
-            f"acompressor=threshold=-21dB:ratio=2.5:attack=12:release=200,"
-            f"volume={gain:.3f},loudnorm=I=-16:TP=-1.5:LRA=11")
+        parts = []
+    elif mode == "limpo":
+        parts = ["highpass=f=65", "lowpass=f=15000"]
+    elif mode == "voz":
+        parts = ["highpass=f=90", "lowpass=f=12500",
+                 "equalizer=f=250:t=q:w=0.9:g=-2",
+                 "equalizer=f=3000:t=q:w=1.1:g=3"]
+    elif mode == "estudio":
+        parts = ["highpass=f=80", "lowpass=f=14500",
+                 "equalizer=f=200:t=q:w=1:g=-2",
+                 "equalizer=f=3200:t=q:w=1.2:g=4",
+                 "acompressor=threshold=-23dB:ratio=3:attack=12:release=180"]
+    elif mode == "podcast":
+        parts = ["highpass=f=75", "lowpass=f=14000",
+                 "equalizer=f=145:t=q:w=1:g=3",
+                 "equalizer=f=3400:t=q:w=1.1:g=4",
+                 "acompressor=threshold=-26dB:ratio=4:attack=9:release=160"]
+    else: # forte
+        parts = ["highpass=f=110", "lowpass=f=10500",
+                 "equalizer=f=240:t=q:w=1:g=-3",
+                 "equalizer=f=3100:t=q:w=1:g=4",
+                 "acompressor=threshold=-27dB:ratio=4.5:attack=8:release=200"]
+    if mode != "original" and noise > 0:
+        # afftdn nf - noise floor, nr strength; clamp within FFmpeg documented range
+        nr = 4 + noise * .17
+        parts.insert(0, f"afftdn=nr={nr:.2f}:nf=-40")
+    if bass:
+        parts.append(f"equalizer=f=130:t=q:w=0.8:g={bass:.2f}")
+    if treble:
+        parts.append(f"equalizer=f=6500:t=q:w=0.9:g={treble:.2f}")
+    if gate and mode != "original":
+        parts.append("agate=threshold=0.025:ratio=2:attack=12:release=180")
+    parts.append(f"volume={gain:.3f}")
+    if mode != "original":
+        parts.append("loudnorm=I=-16:TP=-1.5:LRA=10")
+    return ",".join(parts)
 
 
 def render(ffmpeg, source, music, cover, output, scenes, duration, has_audio,
-           intensity, audio_mode, voice_gain, music_gain, output_format, progress_cb):
+           intensity, audio_mode, voice_gain, music_gain, output_format, progress_cb,\n           bass=0, treble=0, noise=50, gate=False):
     if output_format not in ALLOWED_FORMATS:
         raise ValueError("Formato de saída inválido.")
     if audio_mode not in {"original", "limpo", "voz"}:
@@ -166,7 +202,7 @@ def render(ffmpeg, source, music, cover, output, scenes, duration, has_audio,
     else:
         filters.append("[joinedv]null[outv]")
     if has_audio:
-        filters.append(f"[joineda]{audio_filters(audio_mode, voice_gain)}[voice]")
+        filters.append(f"[joineda]{audio_filters(audio_mode, voice_gain, bass, treble, noise, gate)}[voice]")
     if music:
         filters.append(f"[1:a]volume={clamp(float(music_gain),0,0.8):.3f},aresample=48000[music]")
         if has_audio:
