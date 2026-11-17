@@ -711,7 +711,18 @@ const form=document.getElementById('form'),go=document.getElementById('go'),work
 const statusEl=document.getElementById('status'),bar=document.getElementById('bar'),pct=document.getElementById('percent');
 const uploadBar=document.getElementById('uploadBar'),uploadPct=document.getElementById('uploadPercent');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let mediaId=null,uploading=null,previewStart=0;
+let mediaId=null,uploading=null,previewStart=0,comparingOriginal=false;
+function invalidateRenderedPreview(){
+ const player=document.getElementById('realPreview');
+ if(player.src){
+  player.pause();
+  document.getElementById('livePreviewStatus').textContent='Ajustes alterados. Clique em Aplicar melhorias para gerar uma nova prévia real.';
+ }
+}
+['audio_mode','voice_gain','bass','treble','noise','gate','intensity','preset','output_format'].forEach(id=>{
+ document.getElementById(id).addEventListener('input',invalidateRenderedPreview);
+});
+
 async function uploadMediaOnce(){
  if(mediaId)return mediaId;
  if(uploading)return uploading;
@@ -762,7 +773,7 @@ document.getElementById('renderPreview').addEventListener('click',async()=>{
    status.textContent=progress.message+' ('+progress.progress+'%)';
    if(progress.state==='erro')throw Error(progress.message);
    if(progress.state==='concluido'){
-    previewStart=cursor;
+    previewStart=cursor;comparingOriginal=false;
     const enhanced=document.getElementById('realPreview');enhanced.src=progress.video;
     document.getElementById('realPreviewBox').classList.remove('hidden');
     status.textContent='Prévia pronta. Ouça original e melhorado alternadamente.';
@@ -776,11 +787,12 @@ document.getElementById('renderPreview').addEventListener('click',async()=>{
 });
 document.getElementById('listenOriginal').addEventListener('click',()=>{
  document.getElementById('realPreview').pause();
+ comparingOriginal=true;showOriginal=true;previewCurrentLook();
  localPreview.currentTime=previewStart;
  localPreview.muted=false;localPreview.play().catch(()=>{});
 });
 document.getElementById('listenEnhanced').addEventListener('click',()=>{
- localPreview.pause();
+ localPreview.pause();comparingOriginal=false;
  const p=document.getElementById('realPreview');p.currentTime=0;p.muted=false;p.play().catch(()=>{});
 });
 document.getElementById('makeCaptions').addEventListener('click',async()=>{
@@ -977,6 +989,7 @@ function previewCurrentLook(){
  localPreview.style.transform='scale('+zoom+')';
 }
 localPreview.addEventListener('timeupdate',()=>{
+ if(comparingOriginal&&localPreview.currentTime>=previewStart+8){localPreview.pause();comparingOriginal=false}
  if(!scenes.length&&Number(endInput.value)>0&&localPreview.currentTime>=Number(endInput.value))localPreview.pause();
  previewCurrentLook();
 });
