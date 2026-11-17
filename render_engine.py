@@ -13,6 +13,7 @@ from pathlib import Path
 ALLOWED_LOOKS = {"natural", "cinema", "vibrante", "quente", "frio", "pb"}
 ALLOWED_ZOOMS = {"nenhum", "leve", "proximo"}
 ALLOWED_FORMATS = {"original", "vertical", "horizontal", "quadrado"}
+ALLOWED_TRANSITIONS = {"cut", "fade"}
 
 
 def clamp(value, low, high):
@@ -22,7 +23,7 @@ def clamp(value, low, high):
 def parse_scenes(raw, duration, start_at, end_at, default_style):
     if not raw:
         return [{"start": start_at, "end": end_at, "look": default_style,
-                 "zoom": "nenhum", "speed": 1.0, "label": "Vídeo"}]
+                 "zoom": "nenhum", "speed": 1.0, "label": "Vídeo", "transition": "cut"}]
     try:
         scenes = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
@@ -48,11 +49,13 @@ def parse_scenes(raw, duration, start_at, end_at, default_style):
             raise ValueError("A velocidade deve ficar entre 0,5x e 2x.")
         look = scene.get("look", default_style)
         zoom = scene.get("zoom", "nenhum")
-        if look not in ALLOWED_LOOKS or zoom not in ALLOWED_ZOOMS:
+        transition = scene.get("transition", "cut")
+        if look not in ALLOWED_LOOKS or zoom not in ALLOWED_ZOOMS or transition not in ALLOWED_TRANSITIONS:
             raise ValueError("Efeito não reconhecido em um dos trechos.")
         result.append({"start": start, "end": min(duration, end),
                        "speed": speed, "look": look, "zoom": zoom,
-                       "label": str(scene.get("label", "Cena"))[:60]})
+                       "label": str(scene.get("label", "Cena"))[:60],
+                       "transition": transition})
         total_seconds += (end - start) / speed
     if total_seconds > 4 * 3600:
         raise ValueError("O projeto não pode ultrapassar quatro horas de saída.")
@@ -132,6 +135,11 @@ def render(ffmpeg, source, music, cover, output, scenes, duration, has_audio,
     for i, scene in enumerate(scenes):
         start, end, speed = scene["start"], scene["end"], scene["speed"]
         vf = video_filters(scene["look"], scene["zoom"], intensity, output_format)
+        clip_length = (end-start)/speed
+        if scene.get("transition") == "fade" and i > 0 and clip_length > 1:
+            vf += ",fade=t=in:st=0:d=0.35"
+        if scene.get("transition") == "fade" and i < len(scenes)-1 and clip_length > 1:
+            vf += f",fade=t=out:st={max(0,clip_length-0.35):.3f}:d=0.35"
         filters.append(
             f"[0:v]trim=start={start:.4f}:end={end:.4f},setpts=(PTS-STARTPTS)/{speed:.4f},"
             f"{vf}[v{i}]"
@@ -162,7 +170,8 @@ def render(ffmpeg, source, music, cover, output, scenes, duration, has_audio,
     if music:
         filters.append(f"[1:a]volume={clamp(float(music_gain),0,0.8):.3f},aresample=48000[music]")
         if has_audio:
-            filters.append("[voice][music]amix=inputs=2:duration=first:dropout_transition=1[outa]")
+            filters.append("[music][voice]sidechaincompress=threshold=0.05:ratio=5:attack=40:release=350[ducked]")
+            filters.append("[voice][ducked]amix=inputs=2:duration=first:dropout_transition=1[outa]")
         else:
             filters.append("[music]anull[outa]")
     elif has_audio:
