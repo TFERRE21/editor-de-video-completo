@@ -11,6 +11,7 @@ from pathlib import Path
 import imageio_ffmpeg
 from render_engine import parse_scenes, render
 from smart_edit import automatic_plan
+from captions import transcribe
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -151,6 +152,53 @@ def process(job_id, source, music, cover, preset, cuts, start_at, end_at, intens
                 video=f"/api/jobs/{job_id}/video", size=target.stat().st_size)
     except Exception as exc:
         set_job(job_id, state="erro", message=str(exc)[:1900], progress=0)
+
+
+def _caption_worker(task_id, source):
+    try:
+        set_job(task_id, state="processando", message="Transcrevendo áudio localmente", progress=10)
+        out = source.parent / "legendas.srt"
+        result = transcribe(FFMPEG, source, out)
+        set_job(task_id, state="concluido", message=f"{result['segments']} legendas geradas.",
+                progress=100, subtitles=f"/api/captions/{task_id}/srt")
+    except Exception as exc:
+        set_job(task_id, state="erro", message=str(exc)[:700], progress=0)
+
+
+@app.post("/api/captions")
+async def create_captions(video: UploadFile = File(...)):
+    ext = Path(video.filename or "").suffix.lower()
+    if ext not in VIDEO_EXTS:
+        raise HTTPException(400, "Selecione um vídeo válido.")
+    task_id = uuid.uuid4().hex
+    folder = DATA / task_id
+    folder.mkdir(mode=0o700)
+    path = folder / ("original" + ext)
+    try:
+        total = 0
+        with path.open("wb") as out:
+            while chunk := await video.read(1024*1024):
+                total += len(chunk)
+                if total > 400*1024*1024:
+                    raise HTTPException(413, "A transcrição aceita vídeos até 400 MB.")
+                out.write(chunk)
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    with lock:
+        jobs[task_id] = {"id":task_id,"state":"na_fila","progress":0,"message":"Aguardando transcrição"}
+    threading.Thread(target=_caption_worker, args=(task_id,path),daemon=True).start()
+    return {"id":task_id}
+
+
+@app.get("/api/captions/{task_id}/srt")
+def caption_file(task_id: str):
+    with lock:
+        job = jobs.get(task_id)
+    path = DATA / task_id / "legendas.srt"
+    if not job or job.get("state") != "concluido" or not path.exists():
+        raise HTTPException(404, "Legendas ainda não disponíveis.")
+    return FileResponse(path, media_type="application/x-subrip", filename="legendas.srt")
 
 
 @app.post("/api/auto-plan")
