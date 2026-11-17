@@ -57,6 +57,7 @@ AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 jobs = {}
 lock = threading.Lock()
+media = {}
 RENDER_CONCURRENCY = max(1, min(4, int(os.getenv("MAX_PARALLEL_RENDERS", "1"))))
 RENDER_SLOTS = threading.BoundedSemaphore(RENDER_CONCURRENCY)
 KEEP_DAYS = max(1, min(365, int(os.getenv("EDITOR_KEEP_DAYS", "7"))))
@@ -164,6 +165,108 @@ def make_filters(preset, has_audio, intensity=65):
     return v, a if has_audio else None
 
 
+def resolve_media(media_id):
+    if not media_id or not re.fullmatch(r"[a-f0-9]{32}", media_id):
+        raise HTTPException(404, "Vídeo carregado não encontrado.")
+    with lock:
+        item = media.get(media_id)
+    if not item or not Path(item["path"]).is_file():
+        raise HTTPException(404, "Vídeo carregado expirou. Envie novamente.")
+    return Path(item["path"])
+
+
+@app.post("/api/media")
+async def upload_media(video: UploadFile = File(...)):
+    ext = Path(video.filename or "").suffix.lower()
+    if ext not in VIDEO_EXTS:
+        raise HTTPException(400, "Formato de vídeo inválido.")
+    await __import__("asyncio").to_thread(prune_old_files)
+    key = uuid.uuid4().hex
+    folder = DATA / ("media-" + key)
+    folder.mkdir(mode=0o700)
+    source = folder / ("original" + ext)
+    try:
+        count = 0
+        with source.open("wb") as out:
+            while chunk := await video.read(1024*1024):
+                count += len(chunk)
+                if count > MAX_BYTES:
+                    raise HTTPException(413, "O vídeo excede o limite de 4 GB.")
+                out.write(chunk)
+        if count < 100:
+            raise HTTPException(400, "Vídeo vazio.")
+        duration, has_audio = await __import__("asyncio").to_thread(run_probe, source)
+        with lock:
+            media[key] = {"path":str(source),"duration":duration,"has_audio":has_audio}
+        return {"media_id":key,"duration":duration,"has_audio":has_audio}
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def preview_worker(task_id, source, time_at, intensity, audio_mode, voice_gain,
+                   bass, treble, noise, gate, look, zoom, output_format):
+    try:
+        set_job(task_id, state="analisando", progress=4, message="Preparando prévia real")
+        duration, has_audio = run_probe(source)
+        start = max(0, min(float(time_at), duration-0.5))
+        end = min(duration, start+8)
+        scene = {"start":start,"end":end,"speed":1,"look":look,"zoom":zoom,"transition":"cut"}
+        set_job(task_id, state="processando", progress=10,
+                message="Renderizando 8 segundos com o FFmpeg")
+        path = DATA / task_id / "previa.mp4"
+        with RENDER_SLOTS:
+            render(FFMPEG, source, None, None, path, [scene], duration, has_audio,
+                   intensity, audio_mode, voice_gain, 0, output_format,
+                   lambda p: set_job(task_id, progress=p),
+                   bass=bass, treble=treble, noise=noise, gate=gate)
+        set_job(task_id, state="concluido", progress=100,
+                message="Prévia renderizada: compare imagem e áudio.",
+                video=f"/api/previews/{task_id}/video")
+    except Exception as exc:
+        set_job(task_id, state="erro", progress=0, message=str(exc)[:1500])
+
+
+@app.post("/api/previews")
+async def create_preview(
+    media_id: str = Form(...), time_at: float = Form(0),
+    intensity: int = Form(70), audio_mode: str = Form("estudio"),
+    voice_gain: float = Form(1.0), bass: float = Form(0),
+    treble: float = Form(0), noise: float = Form(50), gate: bool = Form(False),
+    look: str = Form("vibrante"), zoom: str = Form("nenhum"),
+    output_format: str = Form("horizontal")
+):
+    source = resolve_media(media_id)
+    if audio_mode not in {"original","limpo","voz","estudio","podcast","forte"}:
+        raise HTTPException(400, "Modo de áudio inválido.")
+    if look not in {"natural","cinema","vibrante","quente","frio","pb"}:
+        raise HTTPException(400, "Estilo visual inválido.")
+    if zoom not in {"nenhum","leve","proximo"} or output_format not in {"original","horizontal","vertical","quadrado"}:
+        raise HTTPException(400,"Formato ou zoom inválido.")
+    if not (0 <= intensity <= 100 and 0 <= noise <= 100 and 0 <= voice_gain <= 2
+            and -12 <= bass <= 12 and -12 <= treble <= 12 and 0 <= time_at < 86400):
+        raise HTTPException(400, "Valores da prévia fora do intervalo permitido.")
+    task_id = uuid.uuid4().hex
+    (DATA/task_id).mkdir(mode=0o700)
+    with lock:
+        jobs[task_id] = {"id":task_id,"state":"na_fila","progress":0,
+                         "message":"Aguardando renderização de prévia"}
+    threading.Thread(target=preview_worker, args=(
+        task_id,source,time_at,intensity,audio_mode,voice_gain,
+        bass,treble,noise,gate,look,zoom,output_format),daemon=True).start()
+    return {"id":task_id}
+
+
+@app.get("/api/previews/{task_id}/video")
+def preview_video(task_id: str):
+    with lock:
+        item = jobs.get(task_id)
+    path = DATA / task_id / "previa.mp4"
+    if not item or item["state"] != "concluido" or not path.exists():
+        raise HTTPException(404, "A prévia ainda não está pronta.")
+    return FileResponse(path, media_type="video/mp4", filename="previa-melhorada.mp4")
+
+
 def process(*args):
     job_id = args[0]
     set_job(job_id, message="Aguardando vaga para renderização", state="na_fila")
@@ -172,7 +275,8 @@ def process(*args):
 
 
 def _process_unlocked(job_id, source, music, cover, preset, cuts, start_at, end_at, intensity,
-            scenes_json, audio_mode, voice_gain, music_gain, output_format, subtitle_file):
+            scenes_json, audio_mode, voice_gain, music_gain, output_format, subtitle_file,
+            bass, treble, noise, gate):
     try:
         set_job(job_id, state="analisando", message="Analisando duração, cenas e faixas de áudio", progress=2)
         duration, has_audio = run_probe(source)
@@ -195,7 +299,8 @@ def _process_unlocked(job_id, source, music, cover, preset, cuts, start_at, end_
         set_job(job_id, state="processando", message="Renderizando cada cena, cor, som e efeitos", progress=8)
         render(FFMPEG, source, music, cover, target, scenes, duration, has_audio,
                intensity, audio_mode, voice_gain, music_gain, output_format,
-               lambda p: set_job(job_id, progress=min(p,90) if subtitle_file else p))
+               lambda p: set_job(job_id, progress=min(p,90) if subtitle_file else p),
+               bass=bass, treble=treble, noise=noise, gate=gate)
         if subtitle_file:
             set_job(job_id, state="processando", progress=92,
                     message="Incorporando faixa de legendas SRT ao MP4")
@@ -296,7 +401,8 @@ async def auto_plan(video: UploadFile = File(...), style: str = Form("social")):
 
 @app.post("/api/jobs")
 async def create_job(
-    video: UploadFile = File(...),
+    video: UploadFile | None = File(None),
+    media_id: str = Form(""),
     preset: str = Form("equilibrado"),
     remove_silence: bool = Form(False),
     music: UploadFile | None = File(None),
@@ -309,12 +415,18 @@ async def create_job(
     voice_gain: float = Form(1.0),
     music_gain: float = Form(0.12),
     output_format: str = Form("original"),
-    subtitle_file: UploadFile | None = File(None)
+    subtitle_file: UploadFile | None = File(None),
+    bass: float = Form(0),
+    treble: float = Form(0),
+    noise: float = Form(50),
+    gate: bool = Form(False)
 ):
     if preset not in {"equilibrado", "dinamico", "suave"}:
         raise HTTPException(400, "Estilo inválido.")
-    ext = Path(video.filename or "").suffix.lower()
-    if ext not in VIDEO_EXTS:
+    if not media_id and video is None:
+        raise HTTPException(400,"Selecione ou carregue um vídeo.")
+    ext = Path(video.filename or "").suffix.lower() if video else ""
+    if not media_id and ext not in VIDEO_EXTS:
         raise HTTPException(400, "Formato de vídeo inválido.")
     mext = Path(music.filename or "").suffix.lower() if music and music.filename else ""
     if music and music.filename and mext not in AUDIO_EXTS:
@@ -322,8 +434,10 @@ async def create_job(
     cover_ext = Path(cover.filename or "").suffix.lower() if cover and cover.filename else ""
     if cover and cover.filename and cover_ext not in IMAGE_EXTS:
         raise HTTPException(400, "A capa deve ser JPG, PNG ou WebP.")
-    if audio_mode not in {"original", "limpo", "voz"} or output_format not in {"original", "vertical", "horizontal", "quadrado"}:
+    if audio_mode not in {"original", "limpo", "voz", "estudio", "podcast", "forte"} or output_format not in {"original", "vertical", "horizontal", "quadrado"}:
         raise HTTPException(400, "Modo de áudio ou formato inválido.")
+    if not (-12 <= bass <= 12 and -12 <= treble <= 12 and 0 <= noise <= 100):
+        raise HTTPException(400, "Equalização ou redução de ruído inválida.")
     if not 0 <= voice_gain <= 2 or not 0 <= music_gain <= 0.8:
         raise HTTPException(400, "Volumes fora da faixa permitida.")
     if not 0 <= intensity <= 100 or start_at < 0 or end_at < 0:
@@ -332,17 +446,24 @@ async def create_job(
     job_id = uuid.uuid4().hex
     folder = DATA / job_id
     folder.mkdir(mode=0o700)
-    src = folder / ("original" + ext)
+    src = folder / ("original" + (resolve_media(media_id).suffix if media_id else ext))
     try:
-        size = 0
-        with src.open("wb") as f:
-            while chunk := await video.read(1024 * 1024):
-                size += len(chunk)
-                if size > MAX_BYTES:
-                    raise HTTPException(413, "O vídeo excede o limite configurado de 4 GB.")
-                f.write(chunk)
-        if size < 100:
-            raise HTTPException(400, "Vídeo vazio.")
+        if media_id:
+            uploaded = resolve_media(media_id)
+            try:
+                os.link(uploaded, src)
+            except OSError:
+                shutil.copyfile(uploaded, src)
+        else:
+            size = 0
+            with src.open("wb") as f:
+                while chunk := await video.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_BYTES:
+                        raise HTTPException(413, "O vídeo excede o limite configurado de 4 GB.")
+                    f.write(chunk)
+            if size < 100:
+                raise HTTPException(400, "Vídeo vazio.")
         soundtrack = None
         if music and music.filename:
             soundtrack = folder / ("trilha" + mext)
@@ -383,7 +504,8 @@ async def create_job(
                             message="Aguardando processamento", video=None)
     threading.Thread(target=process, args=(job_id, src, soundtrack, cover_path, preset, remove_silence,
                            start_at, end_at, intensity, scenes_json, audio_mode,
-                           voice_gain, music_gain, output_format, subtitle_path),
+                           voice_gain, music_gain, output_format, subtitle_path,
+                           bass, treble, noise, gate),
                      daemon=True).start()
     return {"id": job_id}
 
