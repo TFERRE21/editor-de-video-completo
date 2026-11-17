@@ -292,6 +292,14 @@ button:disabled{opacity:.55;cursor:wait}
 input[type=number],input[type=range]{width:100%}
 input[type=number]{padding:13px;background:#0c1423;color:white;border:1px solid #384964;border-radius:10px}
 input[type=range]{accent-color:#7484ff}
+.scene{background:#0d1729;border:1px solid #324466;border-radius:12px;padding:13px;margin:12px 0}
+.scene-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.scene h3{font-size:14px;margin:0;color:#c7d4ff}
+.scene button{margin:0;padding:8px 10px;font-size:12px}
+.scene-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.scene-cols label{font-size:12px}
+.scene-cols input,.scene-cols select{width:100%;padding:9px;background:#141f33;border:1px solid #344966;border-radius:8px;color:white}
+@media(max-width:480px){.scene-cols{grid-template-columns:1fr}}
 .pill{color:#9ec1ff;border:1px solid #374b70;border-radius:10px;padding:8px 10px;display:inline-block;margin-top:12px}
 @media(max-width:800px){.editor-grid{grid-template-columns:1fr}.controls{grid-template-columns:1fr}}
 .hidden{display:none}footer{text-align:center;color:#8498b5;padding:28px}
@@ -316,12 +324,35 @@ input[type=range]{accent-color:#7484ff}
 </div>
 <label for="cover">🖼️ Adicionar capa (opcional)</label><input id="cover" name="cover" type="file" accept="image/png,image/jpeg,image/webp">
 <p class="small">JPG, PNG ou WebP · a capa aparece nos 2 segundos iniciais do MP4</p>
+<div style="border-top:1px solid #344966;margin:22px 0 14px;padding-top:14px"><h2>🎞️ Linha do tempo por cenas</h2>
+<p class="small">Adicione até 30 trechos. Você pode dar a cada um cor, zoom e velocidade diferentes. Trechos são reproduzidos na ordem da lista.</p>
+<div id="sceneList"></div>
+<div class="controls">
+<button type="button" id="addScene" style="margin-top:10px;background:#32466e">+ Adicionar trecho</button>
+<button type="button" id="clearScenes" style="margin-top:10px;background:#28364f">Usar vídeo inteiro</button>
+</div><p class="small" id="sceneSummary">Sem cortes por cenas: o vídeo inteiro será usado.</p></div>
+<input type="hidden" name="scenes_json" id="scenes_json">
 <label for="preset">Estilo da edição</label>
 <select id="preset" name="preset"><option value="equilibrado">Profissional equilibrado</option><option value="dinamico">Dinâmico — cores vivas e zoom sutil</option><option value="suave">Suave — acabamento natural</option></select>
 <label for="intensity">✨ Força da melhoria visual: <output id="intensityValue">65%</output></label>
 <input type="range" id="intensity" name="intensity" min="0" max="100" value="65" step="5">
 <p class="small">Aumente para destacar nitidez, contraste e cores (100% mais intenso). Prévia aproximada abaixo.</p>
 <div class="check" style="margin-top:20px"><input id="remove_silence" name="remove_silence" type="checkbox" value="true"><label for="remove_silence">Remover pausas silenciosas longas (opcional)</label></div>
+<h2>🎙️ Mixagem de áudio</h2>
+<label for="audio_mode">Tratamento da voz / som original</label>
+<select id="audio_mode" name="audio_mode">
+<option value="voz">Voz destacada — redução de ruído + compressão</option>
+<option value="limpo">Som limpo — tratamento equilibrado</option>
+<option value="original">Áudio original — sem tratamento de ruído</option></select>
+<label for="voice_gain">Volume da voz: <output id="voiceGainValue">100%</output></label>
+<input type="range" id="voice_gain" name="voice_gain" min="0" max="2" value="1" step="0.05">
+<label for="music_gain">Volume da música: <output id="musicGainValue">12%</output></label>
+<input type="range" id="music_gain" name="music_gain" min="0" max="0.8" value="0.12" step="0.02">
+<label for="output_format">📱 Formato do vídeo final</label>
+<select id="output_format" name="output_format"><option value="original">Padrão HD 16:9</option>
+<option value="vertical">Vertical 9:16 — Reels / Shorts</option>
+<option value="horizontal">Horizontal 16:9 — YouTube</option>
+<option value="quadrado">Quadrado 1:1 — Feed</option></select>
 <label for="music">Música de fundo (opcional)</label><input id="music" name="music" type="file" accept="audio/*">
 <p class="small">A trilha enviada será misturada em volume baixo com a voz. Use músicas autorizadas.</p>
 <button id="go" type="submit">✨ Melhorar vídeo automaticamente</button>
@@ -332,7 +363,7 @@ input[type=range]{accent-color:#7484ff}
 <video id="localPreview" class="editor-preview" controls playsinline></video>
 <p id="previewInfo" class="small">Selecione um vídeo para visualizar e definir o intervalo de corte.</p>
 <div class="pill">Corte selecionado: <strong id="rangeLabel">Vídeo completo</strong></div>
-<p class="small">A prévia dos efeitos no navegador é uma aproximação. O arquivo final é gerado com FFmpeg.</p>
+<p class="small">Use o vídeo à esquerda para conferir o corte. Selecionar um trecho na linha do tempo move a reprodução para o início dele. O filtro da prévia é aproximado; a renderização aplica os efeitos de cada trecho.</p>
 <img id="coverPreview" alt="Prévia da capa escolhida" class="hidden" style="width:100%;max-height:160px;object-fit:contain;margin-top:14px;border-radius:10px">
 </div></div>
 <section id="working" class="hidden" aria-live="polite">
@@ -345,6 +376,61 @@ const form=document.getElementById('form'),go=document.getElementById('go'),work
 const statusEl=document.getElementById('status'),bar=document.getElementById('bar'),pct=document.getElementById('percent');
 const uploadBar=document.getElementById('uploadBar'),uploadPct=document.getElementById('uploadPercent');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const sceneList=document.getElementById('sceneList');
+let scenes=[];
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function drawScenes(){
+ sceneList.innerHTML=scenes.map((sc,i)=>`
+ <div class="scene" data-i="${i}">
+  <div class="scene-head"><h3>🎬 Trecho ${i+1}</h3><div><button type="button" data-action="preview" data-i="${i}" style="background:#415e8a">▶ Ver início</button>
+  <button type="button" data-action="delete" data-i="${i}" style="background:#603d4b">Excluir</button></div></div>
+  <div class="scene-cols">
+   <div><label>Início (s)</label><input type="number" min="0" step="0.1" data-key="start" data-i="${i}" value="${sc.start}"></div>
+   <div><label>Fim (s)</label><input type="number" min="0.3" step="0.1" data-key="end" data-i="${i}" value="${sc.end}"></div>
+   <div><label>Cor</label><select data-key="look" data-i="${i}">
+    ${[['natural','Natural'],['cinema','Cinema'],['vibrante','Vibrante'],['quente','Quente'],['frio','Frio'],['pb','Preto e branco']].map(([v,t])=>'<option value="'+v+'" '+(v===sc.look?'selected':'')+'>'+t+'</option>').join('')}
+   </select></div>
+   <div><label>Aproximação</label><select data-key="zoom" data-i="${i}">
+    ${[['nenhum','Sem zoom'],['leve','Zoom leve'],['proximo','Zoom próximo']].map(([v,t])=>'<option value="'+v+'" '+(v===sc.zoom?'selected':'')+'>'+t+'</option>').join('')}
+   </select></div>
+   <div><label>Velocidade</label><select data-key="speed" data-i="${i}">
+    ${[['0.5','0,5x — lento'],['0.75','0,75x'],['1','1x — normal'],['1.25','1,25x'],['1.5','1,5x'],['2','2x — rápido']].map(([v,t])=>'<option value="'+v+'" '+(Number(v)===Number(sc.speed)?'selected':'')+'>'+t+'</option>').join('')}
+   </select></div>
+  </div></div>`).join('');
+ const sum=scenes.reduce((a,x)=>a+Math.max(0,(x.end-x.start)/x.speed),0);
+ document.getElementById('sceneSummary').textContent=scenes.length?
+   scenes.length+' trecho(s) · previsão de '+sum.toFixed(1)+'s de vídeo final':
+   'Sem trechos adicionais: o intervalo de corte principal será utilizado.';
+ document.getElementById('scenes_json').value=scenes.length?JSON.stringify(scenes):'';
+}
+document.getElementById('addScene').addEventListener('click',()=>{
+ if(scenes.length>=30){alert('Limite de 30 trechos.');return}
+ const dur=Number(localPreview.duration)||30, last=scenes[scenes.length-1];
+ const start=last?Math.min(dur-0.3,last.end):Number(startInput.value)||0;
+ const end=Math.min(dur,start+Math.min(8,Math.max(0.3,dur-start)));
+ if(end-start<0.3){alert('Não há duração suficiente para outro trecho.');return}
+ scenes.push({start:Number(start.toFixed(2)),end:Number(end.toFixed(2)),speed:1,look:'vibrante',zoom:'nenhum'});
+ drawScenes();
+});
+document.getElementById('clearScenes').addEventListener('click',()=>{scenes=[];drawScenes()});
+sceneList.addEventListener('click',e=>{
+ const btn=e.target.closest('button[data-action]');if(!btn)return;
+ const i=Number(btn.dataset.i);
+ if(btn.dataset.action==='delete'){scenes.splice(i,1);drawScenes()}
+ else if(localPreview.readyState>0){localPreview.currentTime=scenes[i].start;localPreview.play().catch(()=>{})}
+});
+sceneList.addEventListener('change',e=>{
+ const el=e.target;if(!el.dataset.key)return;
+ const i=Number(el.dataset.i),k=el.dataset.key;
+ scenes[i][k]=['start','end','speed'].includes(k)?Number(el.value):el.value;
+ drawScenes();
+});
+[['voice_gain','voiceGainValue',100],['music_gain','musicGainValue',100]].forEach(([id,target,mul])=>{
+ document.getElementById(id).addEventListener('input',e=>{
+  document.getElementById(target).textContent=Math.round(Number(e.target.value)*mul)+'%';
+ });
+});
+drawScenes();
 const localPreview=document.getElementById('localPreview'),videoInput=document.getElementById('video');
 const startInput=document.getElementById('start_at'),endInput=document.getElementById('end_at');
 let localUrl=null,coverUrl=null;
@@ -409,6 +495,9 @@ form.addEventListener('submit',async e=>{
  const start=Number(startInput.value)||0,end=Number(endInput.value)||0;
  if(end>0&&end-start<0.3){statusEl.textContent='Defina um fim de corte posterior ao início.';working.classList.remove('hidden');return}
  if(localPreview.duration&&start>=localPreview.duration){statusEl.textContent='O início do corte ultrapassa a duração do vídeo.';working.classList.remove('hidden');return}
+ if(scenes.some(x=>!Number.isFinite(x.start)||!Number.isFinite(x.end)||x.start<0||x.end-x.start<0.3||x.end>(localPreview.duration||Infinity)+0.15||x.speed<0.5||x.speed>2)){
+  statusEl.textContent='Revise os tempos e velocidades dos trechos na linha do tempo.';working.classList.remove('hidden');return
+ }
  go.disabled=true;result.classList.add('hidden');working.classList.remove('hidden');
  statusEl.textContent='Aguardando conclusão do envio...';bar.style.width='0%';pct.textContent='0%';
  uploadBar.style.width='0%';uploadPct.textContent='0% — preparando envio';
