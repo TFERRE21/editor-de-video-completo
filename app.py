@@ -14,7 +14,14 @@ from starlette.background import BackgroundTask
 
 app = FastAPI(title="Editor de Vídeo Automático")
 DATA = Path(os.getenv("EDITOR_DATA_DIR", "/data"))
-DATA.mkdir(parents=True, exist_ok=True)
+try:
+    DATA.mkdir(parents=True, exist_ok=True)
+    probe_path = DATA / ".write-check"
+    probe_path.write_text("ok")
+    probe_path.unlink()
+except (OSError, PermissionError):
+    DATA = Path("/tmp/editor-video-data")
+    DATA.mkdir(parents=True, exist_ok=True)
 MAX_BYTES = 1024 * 1024 * 1024
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
@@ -308,3 +315,9 @@ form.addEventListener('submit',async e=>{
 });
 </script></body></html>
 """;
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", os.getenv("APP_PORT", "8080")))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
