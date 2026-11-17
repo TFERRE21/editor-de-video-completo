@@ -28,6 +28,7 @@ MAX_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(4 * 1024 * 1024 * 1024)))
 FFMPEG = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 jobs = {}
 lock = threading.Lock()
 
@@ -93,7 +94,7 @@ def detect_kept_segments(path, duration):
     return segments
 
 
-def make_filters(preset, has_audio):
+def make_filters(preset, has_audio, intensity=65):
     if preset == "dinamico":
         v = ("hqdn3d=1.5:1.5:5:5,eq=contrast=1.07:saturation=1.17:brightness=0.008,"
              "unsharp=5:5:0.65:3:3:0.25,"
@@ -102,26 +103,49 @@ def make_filters(preset, has_audio):
         v = "hqdn3d=2:2:6:6,eq=contrast=1.035:saturation=1.06,unsharp=5:5:0.32:3:3:0.1"
     else:
         v = "hqdn3d=1.5:1.5:5:5,eq=contrast=1.055:saturation=1.10,unsharp=5:5:0.48:3:3:0.15"
+    # Intensidade visível: 0 a 100, usando parâmetros FFmpeg limitados
+    strength = max(0, min(100, int(intensity))) / 100
+    if strength == 0:
+        v = "null"
+    else:
+        v = (
+            f"hqdn3d=1.5:1.5:5:5,eq=contrast={1+0.19*strength:.3f}:"
+            f"saturation={1+0.38*strength:.3f}:brightness={0.018*strength:.3f},"
+            f"unsharp=5:5:{0.98*strength:.3f}:3:3:{0.32*strength:.3f}"
+        ) + (",crop=iw*0.95:ih*0.95:(iw-ow)*(0.5+0.24*sin(n/65)):(ih-oh)*(0.5+0.18*cos(n/83))" if preset=="dinamico" else "")
     # ensure compatible 4:2:0 output dimensions
     v += ",scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,format=yuv420p"
     a = "highpass=f=75,lowpass=f=15000,afftdn=nf=-24,acompressor=threshold=-20dB:ratio=2.4:attack=15:release=220,loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=limit=0.94"
     return v, a if has_audio else None
 
 
-def process(job_id, source, music, preset, cuts):
+def process(job_id, source, music, cover, preset, cuts, start_at, end_at, intensity):
     try:
         set_job(job_id, state="analisando", message="Analisando vídeo", progress=2)
         duration, has_audio = run_probe(source)
+        start_at = max(0.0, min(float(start_at), duration - 0.1))
+        end_at = float(end_at) if float(end_at) > 0 else duration
+        end_at = min(end_at, duration)
+        if end_at - start_at < 0.3:
+            raise ValueError("Selecione um intervalo de pelo menos 0,3 segundo.")
         segments = None
         if cuts and has_audio:
             set_job(job_id, message="Detectando pausas silenciosas", progress=4)
             segments = detect_kept_segments(source, duration)
-        vf, af = make_filters(preset, has_audio)
+            if segments:
+                segments = [(max(a, start_at), min(b, end_at)) for a,b in segments]
+                segments = [(a,b) for a,b in segments if b-a >= 0.3]
+                if not segments:
+                    raise ValueError("Os cortes automáticos removeriam todo o conteúdo; desative a opção de pausas.")
+        vf, af = make_filters(preset, has_audio, intensity)
         target = source.parent / "editado.mp4"
         cmd = [FFMPEG, "-hide_banner", "-y", "-nostdin", "-loglevel", "error",
                "-progress", "pipe:1", "-i", str(source)]
         if music:
             cmd += ["-stream_loop", "-1", "-i", str(music)]
+        if cover:
+            cmd += ["-loop", "1", "-framerate", "25", "-i", str(cover)]
+        cover_index = 2 if music else 1
         filter_steps = []
         if segments:
             for i, (start, end) in enumerate(segments):
@@ -134,8 +158,20 @@ def process(job_id, source, music, preset, cuts):
             vin, ain = "[vc]", "[ac]"
             output_duration = sum(end - start for start, end in segments)
         else:
-            vin, ain, output_duration = "[0:v]", "[0:a]", duration
-        filter_steps.append(f"{vin}{vf}[vout]")
+            vin, ain, output_duration = "[vc]", "[ac]", end_at - start_at
+            filter_steps.append(f"[0:v]trim=start={start_at:.3f}:end={end_at:.3f},setpts=PTS-STARTPTS[vc]")
+            if has_audio:
+                filter_steps.append(f"[0:a]atrim=start={start_at:.3f}:end={end_at:.3f},asetpts=PTS-STARTPTS[ac]")
+        if cover:
+            # A capa substitui os primeiros 2 segundos da imagem, sem esconder o áudio.
+            filter_steps.append(f"{vin}{vf}[graded]")
+            filter_steps.append(
+                f"[{cover_index}:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[coverraw]"
+            )
+            filter_steps.append("[coverraw][graded]scale2ref=w=iw:h=ih[coverfit][gradedref]")
+            filter_steps.append("[gradedref][coverfit]overlay=0:0:enable='lt(t,2)':shortest=1:repeatlast=0[vout]")
+        else:
+            filter_steps.append(f"{vin}{vf}[vout]")
         if has_audio:
             filter_steps.append(f"{ain}{af}[clean]")
             if music:
@@ -179,7 +215,11 @@ async def create_job(
     video: UploadFile = File(...),
     preset: str = Form("equilibrado"),
     remove_silence: bool = Form(False),
-    music: UploadFile | None = File(None)
+    music: UploadFile | None = File(None),
+    cover: UploadFile | None = File(None),
+    start_at: float = Form(0),
+    end_at: float = Form(0),
+    intensity: int = Form(65)
 ):
     if preset not in {"equilibrado", "dinamico", "suave"}:
         raise HTTPException(400, "Estilo inválido.")
@@ -189,6 +229,11 @@ async def create_job(
     mext = Path(music.filename or "").suffix.lower() if music and music.filename else ""
     if music and music.filename and mext not in AUDIO_EXTS:
         raise HTTPException(400, "Formato de música inválido.")
+    cover_ext = Path(cover.filename or "").suffix.lower() if cover and cover.filename else ""
+    if cover and cover.filename and cover_ext not in IMAGE_EXTS:
+        raise HTTPException(400, "A capa deve ser JPG, PNG ou WebP.")
+    if not 0 <= intensity <= 100 or start_at < 0 or end_at < 0:
+        raise HTTPException(400, "Parâmetros de edição inválidos.")
     job_id = uuid.uuid4().hex
     folder = DATA / job_id
     folder.mkdir(mode=0o700)
@@ -213,13 +258,23 @@ async def create_job(
                     if music_size > 100 * 1024 * 1024:
                         raise HTTPException(413, "Limite de 100 MB para trilha.")
                     f.write(chunk)
+        cover_path = None
+        if cover and cover.filename:
+            cover_path = folder / ("capa" + cover_ext)
+            cover_size = 0
+            with cover_path.open("wb") as f:
+                while chunk := await cover.read(1024 * 1024):
+                    cover_size += len(chunk)
+                    if cover_size > 25 * 1024 * 1024:
+                        raise HTTPException(413, "A capa deve ter no máximo 25 MB.")
+                    f.write(chunk)
     except Exception:
         shutil.rmtree(folder, ignore_errors=True)
         raise
     with lock:
         jobs[job_id] = dict(id=job_id, state="na_fila", progress=0,
                             message="Aguardando processamento", video=None)
-    threading.Thread(target=process, args=(job_id, src, soundtrack, preset, remove_silence),
+    threading.Thread(target=process, args=(job_id, src, soundtrack, cover_path, preset, remove_silence, start_at, end_at, intensity),
                      daemon=True).start()
     return {"id": job_id}
 
