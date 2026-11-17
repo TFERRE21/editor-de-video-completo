@@ -451,7 +451,13 @@ input[type=range]{accent-color:#7484ff}
 </section>
 <div class="preview-pane">
 <h2>🎬 Prévia do vídeo</h2>
-<video id="localPreview" class="editor-preview" controls playsinline></video>
+<div style="overflow:hidden;border-radius:12px;background:#000">
+<video id="localPreview" class="editor-preview" controls playsinline></video></div>
+<div class="controls">
+<button type="button" id="captureCover" style="background:#33486f;margin-top:12px">📸 Capturar quadro como capa</button>
+<button type="button" id="toggleBefore" style="background:#33486f;margin-top:12px">👁️ Ver imagem original</button>
+</div>
+<p id="beforeLabel" class="small">Prévia com correção de cores aproximada.</p>
 <p id="previewInfo" class="small">Selecione um vídeo para visualizar e definir o intervalo de corte.</p>
 <div class="pill">Corte selecionado: <strong id="rangeLabel">Vídeo completo</strong></div>
 <p class="small">Use o vídeo à esquerda para conferir o corte. Selecionar um trecho na linha do tempo move a reprodução para o início dele. O filtro da prévia é aproximado; a renderização aplica os efeitos de cada trecho.</p>
@@ -504,7 +510,7 @@ let scenes=[];
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function drawScenes(){
  sceneList.innerHTML=scenes.map((sc,i)=>`
- <div class="scene" data-i="${i}">
+ <div class="scene" data-i="${i}" draggable="true" title="Arraste para mudar a ordem">
   <div class="scene-head"><h3>🎬 Trecho ${i+1}</h3><div><button type="button" data-action="preview" data-i="${i}" style="background:#415e8a">▶ Ver início</button>
   <button type="button" data-action="up" data-i="${i}" style="background:#334967" title="Subir trecho">↑</button>
   <button type="button" data-action="down" data-i="${i}" style="background:#334967" title="Descer trecho">↓</button>
@@ -541,6 +547,19 @@ document.getElementById('addScene').addEventListener('click',()=>{
  drawScenes();
 });
 document.getElementById('clearScenes').addEventListener('click',()=>{scenes=[];drawScenes()});
+let dragScene=-1;
+sceneList.addEventListener('dragstart',e=>{
+ const item=e.target.closest('.scene');if(!item)return;
+ dragScene=Number(item.dataset.i);e.dataTransfer.effectAllowed='move';
+});
+sceneList.addEventListener('dragover',e=>{if(e.target.closest('.scene'))e.preventDefault()});
+sceneList.addEventListener('drop',e=>{
+ const target=e.target.closest('.scene');if(!target||dragScene<0)return;
+ e.preventDefault();const to=Number(target.dataset.i);
+ if(to!==dragScene){const moved=scenes.splice(dragScene,1)[0];scenes.splice(to,0,moved);drawScenes()}
+ dragScene=-1;
+});
+sceneList.addEventListener('dragend',()=>{dragScene=-1});
 document.getElementById('autoDirector').addEventListener('click',async()=>{
  const file=document.getElementById('video').files[0];
  const el=document.getElementById('directorStatus'),btn=document.getElementById('autoDirector');
@@ -601,6 +620,25 @@ drawScenes();
 const localPreview=document.getElementById('localPreview'),videoInput=document.getElementById('video');
 const startInput=document.getElementById('start_at'),endInput=document.getElementById('end_at');
 let localUrl=null,coverUrl=null;
+let showOriginal=false;
+document.getElementById('toggleBefore').addEventListener('click',()=>{
+ showOriginal=!showOriginal;
+ document.getElementById('beforeLabel').textContent=showOriginal?'Mostrando vídeo original, sem filtros.':'Mostrando prévia da correção visual.';
+ previewCurrentLook();
+});
+document.getElementById('captureCover').addEventListener('click',async()=>{
+ if(!localPreview.videoWidth){alert('Carregue um vídeo antes de capturar a capa.');return}
+ const canvas=document.createElement('canvas');
+ canvas.width=localPreview.videoWidth;canvas.height=localPreview.videoHeight;
+ canvas.getContext('2d').drawImage(localPreview,0,0,canvas.width,canvas.height);
+ canvas.toBlob(blob=>{
+  if(!blob){alert('Não foi possível capturar o quadro.');return}
+  const file=new File([blob],'capa-capturada.png',{type:'image/png'});
+  const dt=new DataTransfer();dt.items.add(file);
+  const input=document.getElementById('cover');input.files=dt.files;
+  input.dispatchEvent(new Event('change'));
+ },'image/png');
+});
 function rangeUpdate(){
  const start=Math.max(0,Number(startInput.value)||0);
  const end=Number(endInput.value)||localPreview.duration||0;
@@ -621,6 +659,7 @@ localPreview.addEventListener('loadedmetadata',()=>{
 }));
 function previewCurrentLook(){
  const scene=scenes.find(x=>localPreview.currentTime>=x.start&&localPreview.currentTime<x.end);
+ if(showOriginal){localPreview.style.filter='none';localPreview.style.transform='none';return}
  const amt=Number(document.getElementById('intensity').value)/100;
  const looks={
   natural:[1.07,1.12,1,0],cinema:[1.24,.84,.97,0],
