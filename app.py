@@ -595,6 +595,8 @@ input[type=range]{accent-color:#7484ff}
 <strong>1. Envio do vídeo para a plataforma</strong>
 <div class="track" role="progressbar" aria-label="Envio do arquivo"><div id="uploadBar" class="progress-bar"></div></div>
 <span id="uploadPercent">0% — aguardando envio</span>
+<button type="button" id="uploadMedia" style="margin:12px 0 0;background:#365b79">⬆ Carregar vídeo para edição</button>
+<p class="small">Envie uma vez; teste quantas prévias quiser sem reenviar todo o arquivo.</p>
 </div>
 <div class="controls">
 <div><label for="start_at">✂️ Início do corte (segundos)</label><input type="number" min="0" step="0.1" value="0" id="start_at" name="start_at"></div>
@@ -631,9 +633,23 @@ input[type=range]{accent-color:#7484ff}
 <h2>🎙️ Mixagem de áudio</h2>
 <label for="audio_mode">Tratamento da voz / som original</label>
 <select id="audio_mode" name="audio_mode">
-<option value="voz">Voz destacada — redução de ruído + compressão</option>
+<option value="estudio">Estúdio — voz definida, equilibrada</option>
+<option value="podcast">Podcast — voz encorpada e clara</option>
+<option value="forte">Limpeza intensa — ruído forte (pode alterar a voz)</option>
+<option value="voz">Voz destacada — fala mais presente</option>
 <option value="limpo">Som limpo — tratamento equilibrado</option>
 <option value="original">Áudio original — sem tratamento de ruído</option></select>
+<label for="noise">Redução de ruído: <output id="noiseValue">50%</output></label>
+<input type="range" id="noise" name="noise" min="0" max="100" value="50" step="5">
+<div class="controls"><div>
+<label for="bass">Graves (EQ): <output id="bassValue">0 dB</output></label>
+<input type="range" id="bass" name="bass" min="-12" max="12" step="1" value="0">
+</div><div>
+<label for="treble">Agudos (EQ): <output id="trebleValue">0 dB</output></label>
+<input type="range" id="treble" name="treble" min="-12" max="12" step="1" value="0">
+</div></div>
+<div class="check" style="margin:16px 0"><input type="checkbox" id="gate" name="gate" value="true">
+<label for="gate">Portão de ruído — reduzir som entre falas (pode cortar sons baixos)</label></div>
 <label for="voice_gain">Volume da voz: <output id="voiceGainValue">100%</output></label>
 <input type="range" id="voice_gain" name="voice_gain" min="0" max="2" value="1" step="0.05">
 <label for="music_gain">Volume da música: <output id="musicGainValue">12%</output></label>
@@ -659,7 +675,20 @@ input[type=range]{accent-color:#7484ff}
 <button type="button" id="captureCover" style="background:#33486f;margin-top:12px">📸 Capturar quadro como capa</button>
 <button type="button" id="toggleBefore" style="background:#33486f;margin-top:12px">👁️ Ver imagem original</button>
 </div>
-<p id="beforeLabel" class="small">Prévia com correção de cores aproximada.</p>
+<p id="beforeLabel" class="small">Prévia visual imediata (aproximada). Para ouvir o áudio tratado, gere a prévia real abaixo.</p>
+<div style="margin-top:14px;padding:14px;background:#0f2031;border-radius:12px">
+<strong>🎧 Prévia real de imagem e som</strong>
+<p class="small">Renderiza até 8 segundos do trecho atual com os mesmos filtros usados na exportação. Ouça e compare com o original.</p>
+<button type="button" id="renderPreview" style="width:100%;margin-top:8px">▶ Aplicar melhorias e ouvir prévia</button>
+<p id="livePreviewStatus" class="small">Carregue o vídeo e selecione os ajustes.</p>
+<div id="realPreviewBox" class="hidden">
+<video id="realPreview" controls playsinline style="width:100%;max-height:360px"></video>
+<div class="controls">
+<button type="button" id="listenOriginal" style="background:#344869">Ouvir original</button>
+<button type="button" id="listenEnhanced" style="background:#365b79">Ouvir melhorado</button>
+</div>
+</div>
+</div>
 <p id="previewInfo" class="small">Selecione um vídeo para visualizar e definir o intervalo de corte.</p>
 <div class="pill">Corte selecionado: <strong id="rangeLabel">Vídeo completo</strong></div>
 <p class="small">Use o vídeo à esquerda para conferir o corte. Selecionar um trecho na linha do tempo move a reprodução para o início dele. O filtro da prévia é aproximado; a renderização aplica os efeitos de cada trecho.</p>
@@ -682,6 +711,78 @@ const form=document.getElementById('form'),go=document.getElementById('go'),work
 const statusEl=document.getElementById('status'),bar=document.getElementById('bar'),pct=document.getElementById('percent');
 const uploadBar=document.getElementById('uploadBar'),uploadPct=document.getElementById('uploadPercent');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let mediaId=null,uploading=null,previewStart=0;
+async function uploadMediaOnce(){
+ if(mediaId)return mediaId;
+ if(uploading)return uploading;
+ const file=document.getElementById('video').files[0];
+ if(!file)throw Error('Selecione um vídeo primeiro.');
+ const btn=document.getElementById('uploadMedia');btn.disabled=true;
+ const payload=new FormData();payload.append('video',file);
+ uploadBar.style.width='0%';uploadPct.textContent='0% — iniciando upload...';
+ uploading=sendWithProgress(payload,'/api/media').then(data=>{
+  mediaId=data.media_id;uploadPct.textContent='100% — arquivo carregado; pronto para prévias';
+  return mediaId;
+ }).finally(()=>{uploading=null;btn.disabled=false});
+ return uploading;
+}
+document.getElementById('uploadMedia').addEventListener('click',async()=>{
+ try{await uploadMediaOnce()}catch(e){uploadPct.textContent='Erro: '+e.message}
+});
+[['noise','noiseValue','%'],['bass','bassValue',' dB'],['treble','trebleValue',' dB']].forEach(([id,target,suffix])=>{
+ document.getElementById(id).addEventListener('input',e=>{
+  document.getElementById(target).textContent=e.target.value+suffix;
+ });
+});
+document.getElementById('renderPreview').addEventListener('click',async()=>{
+ const button=document.getElementById('renderPreview');
+ const status=document.getElementById('livePreviewStatus');
+ button.disabled=true;status.textContent='Preparando prévia real...';
+ try{
+  const id=await uploadMediaOnce();
+  const cursor=Number(localPreview.currentTime)||0;
+  const scene=scenes.find(x=>cursor>=x.start&&cursor<x.end);
+  const data=new FormData();
+  const fields={
+   media_id:id, time_at:cursor, intensity:document.getElementById('intensity').value,
+   audio_mode:document.getElementById('audio_mode').value, voice_gain:document.getElementById('voice_gain').value,
+   bass:document.getElementById('bass').value,treble:document.getElementById('treble').value,
+   noise:document.getElementById('noise').value,gate:document.getElementById('gate').checked,
+   look:scene?.look||(({equilibrado:'natural',dinamico:'vibrante',suave:'natural'})[document.getElementById('preset').value]||'natural'),
+   zoom:scene?.zoom||'nenhum',output_format:document.getElementById('output_format').value
+  };
+  Object.entries(fields).forEach(([k,v])=>data.append(k,String(v)));
+  const response=await fetch('/api/previews',{method:'POST',body:data});
+  const task=await response.json();
+  if(!response.ok)throw Error(task.detail||'Falha na solicitação da prévia');
+  for(;;){
+   const resp=await fetch('/api/jobs/'+task.id,{cache:'no-store'});
+   if(!resp.ok)throw Error('Falha ao acompanhar a prévia.');
+   const progress=await resp.json();
+   status.textContent=progress.message+' ('+progress.progress+'%)';
+   if(progress.state==='erro')throw Error(progress.message);
+   if(progress.state==='concluido'){
+    previewStart=cursor;
+    const enhanced=document.getElementById('realPreview');enhanced.src=progress.video;
+    document.getElementById('realPreviewBox').classList.remove('hidden');
+    status.textContent='Prévia pronta. Ouça original e melhorado alternadamente.';
+    enhanced.play().catch(()=>{});
+    localPreview.pause();break;
+   }
+   await sleep(900);
+  }
+ }catch(e){status.textContent='Erro: '+e.message}
+ finally{button.disabled=false}
+});
+document.getElementById('listenOriginal').addEventListener('click',()=>{
+ document.getElementById('realPreview').pause();
+ localPreview.currentTime=previewStart;
+ localPreview.muted=false;localPreview.play().catch(()=>{});
+});
+document.getElementById('listenEnhanced').addEventListener('click',()=>{
+ localPreview.pause();
+ const p=document.getElementById('realPreview');p.currentTime=0;p.muted=false;p.play().catch(()=>{});
+});
 document.getElementById('makeCaptions').addEventListener('click',async()=>{
  const file=document.getElementById('video').files[0];
  const status=document.getElementById('captionStatus'),btn=document.getElementById('makeCaptions');
@@ -847,6 +948,8 @@ function rangeUpdate(){
  document.getElementById('rangeLabel').textContent=start.toFixed(1)+'s → '+end.toFixed(1)+'s';
 }
 videoInput.addEventListener('change',()=>{
+ mediaId=null;document.getElementById('realPreviewBox').classList.add('hidden');
+ uploadBar.style.width='0%';uploadPct.textContent='0% — selecione Carregar vídeo';
  if(localUrl)URL.revokeObjectURL(localUrl);
  const file=videoInput.files[0];if(!file)return;
  localUrl=URL.createObjectURL(file);localPreview.src=localUrl;
@@ -888,10 +991,10 @@ document.getElementById('intensity').addEventListener('input',e=>{
  document.getElementById('intensityValue').textContent=val+'%';
  previewCurrentLook();
 });
-function sendWithProgress(payload){
+function sendWithProgress(payload,endpoint="/api/jobs"){
  return new Promise((resolve,reject)=>{
   const xhr=new XMLHttpRequest();
-  xhr.open('POST','/api/jobs');
+  xhr.open('POST',endpoint);
   xhr.upload.onprogress=e=>{
    if(e.lengthComputable){
     const val=Math.min(99,Math.round(e.loaded*100/e.total));
@@ -922,11 +1025,14 @@ form.addEventListener('submit',async e=>{
  }
  go.disabled=true;result.classList.add('hidden');working.classList.remove('hidden');
  statusEl.textContent='Aguardando conclusão do envio...';bar.style.width='0%';pct.textContent='0%';
- uploadBar.style.width='0%';uploadPct.textContent='0% — preparando envio';
+ if(!mediaId){uploadBar.style.width='0%';uploadPct.textContent='0% — preparando envio'}
  try{
+  const id=await uploadMediaOnce();
   const payload=new FormData(form);
+  payload.delete('video');payload.append('media_id',id);
   if(!document.getElementById('remove_silence').checked)payload.delete('remove_silence');
-  const data=await sendWithProgress(payload);
+  if(!document.getElementById('gate').checked)payload.delete('gate');
+  const data=await sendWithProgress(payload,'/api/jobs');
   statusEl.textContent='Arquivo recebido. Iniciando melhorias...';
   for(;;){
    const r=await fetch('/api/jobs/'+data.id,{cache:'no-store'});
