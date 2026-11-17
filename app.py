@@ -172,7 +172,7 @@ def process(*args):
 
 
 def _process_unlocked(job_id, source, music, cover, preset, cuts, start_at, end_at, intensity,
-            scenes_json, audio_mode, voice_gain, music_gain, output_format):
+            scenes_json, audio_mode, voice_gain, music_gain, output_format, subtitle_file):
     try:
         set_job(job_id, state="analisando", message="Analisando duração, cenas e faixas de áudio", progress=2)
         duration, has_audio = run_probe(source)
@@ -195,7 +195,21 @@ def _process_unlocked(job_id, source, music, cover, preset, cuts, start_at, end_
         set_job(job_id, state="processando", message="Renderizando cada cena, cor, som e efeitos", progress=8)
         render(FFMPEG, source, music, cover, target, scenes, duration, has_audio,
                intensity, audio_mode, voice_gain, music_gain, output_format,
-               lambda p: set_job(job_id, progress=p))
+               lambda p: set_job(job_id, progress=min(p,90) if subtitle_file else p))
+        if subtitle_file:
+            set_job(job_id, state="processando", progress=92,
+                    message="Incorporando faixa de legendas SRT ao MP4")
+            muxed = source.parent / "editado-com-legendas.mp4"
+            mux = subprocess.run([
+                FFMPEG, "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+                "-i", str(target), "-i", str(subtitle_file),
+                "-map", "0:v:0", "-map", "0:a?", "-map", "1:s:0",
+                "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text",
+                "-movflags", "+faststart", str(muxed)
+            ], capture_output=True, text=True, timeout=900)
+            if mux.returncode or not muxed.is_file():
+                raise RuntimeError("Não foi possível incorporar as legendas: " + mux.stderr[-600:])
+            muxed.replace(target)
         set_job(job_id, state="concluido", progress=100,
                 message="Edição completa. Visualize e baixe seu MP4.",
                 video=f"/api/jobs/{job_id}/video", size=target.stat().st_size)
@@ -294,7 +308,8 @@ async def create_job(
     audio_mode: str = Form("voz"),
     voice_gain: float = Form(1.0),
     music_gain: float = Form(0.12),
-    output_format: str = Form("original")
+    output_format: str = Form("original"),
+    subtitle_file: UploadFile | None = File(None)
 ):
     if preset not in {"equilibrado", "dinamico", "suave"}:
         raise HTTPException(400, "Estilo inválido.")
@@ -338,6 +353,18 @@ async def create_job(
                     if music_size > 100 * 1024 * 1024:
                         raise HTTPException(413, "Limite de 100 MB para trilha.")
                     f.write(chunk)
+        subtitle_path = None
+        if subtitle_file and subtitle_file.filename:
+            if Path(subtitle_file.filename).suffix.lower() != ".srt":
+                raise HTTPException(400, "Envie legendas no formato .srt.")
+            subtitle_path = folder / "legendas.srt"
+            sub_size = 0
+            with subtitle_path.open("wb") as f:
+                while chunk := await subtitle_file.read(1024 * 1024):
+                    sub_size += len(chunk)
+                    if sub_size > 2*1024*1024:
+                        raise HTTPException(413, "Limite de 2 MB para legendas.")
+                    f.write(chunk)
         cover_path = None
         if cover and cover.filename:
             cover_path = folder / ("capa" + cover_ext)
@@ -356,7 +383,7 @@ async def create_job(
                             message="Aguardando processamento", video=None)
     threading.Thread(target=process, args=(job_id, src, soundtrack, cover_path, preset, remove_silence,
                            start_at, end_at, intensity, scenes_json, audio_mode,
-                           voice_gain, music_gain, output_format),
+                           voice_gain, music_gain, output_format, subtitle_path),
                      daemon=True).start()
     return {"id": job_id}
 
