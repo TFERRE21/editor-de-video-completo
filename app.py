@@ -452,8 +452,22 @@ localPreview.addEventListener('loadedmetadata',()=>{
 [startInput,endInput].forEach(input=>input.addEventListener('change',()=>{
  rangeUpdate();if(input===startInput&&localPreview.readyState>0)localPreview.currentTime=Number(startInput.value)||0;
 }));
+function previewCurrentLook(){
+ const scene=scenes.find(x=>localPreview.currentTime>=x.start&&localPreview.currentTime<x.end);
+ const amt=Number(document.getElementById('intensity').value)/100;
+ const looks={
+  natural:[1.07,1.12,1,0],cinema:[1.24,.84,.97,0],
+  vibrante:[1.18,1.52,1.01,0],quente:[1.11,1.19,1.03,0],
+  frio:[1.14,1.11,1,0],pb:[1.21,0,1,1]
+ };
+ const [con,sat,bright,gray]=looks[scene?.look||'natural'];
+ localPreview.style.filter='contrast('+(1+(con-1)*amt)+') saturate('+(1+(sat-1)*amt)+') brightness('+(1+(bright-1)*amt)+') grayscale('+(gray*amt)+')';
+ const zoom=scene?.zoom==='proximo'?1.2:scene?.zoom==='leve'?1.06:1;
+ localPreview.style.transform='scale('+zoom+')';
+}
 localPreview.addEventListener('timeupdate',()=>{
- if(Number(endInput.value)>0&&localPreview.currentTime>=Number(endInput.value))localPreview.pause();
+ if(!scenes.length&&Number(endInput.value)>0&&localPreview.currentTime>=Number(endInput.value))localPreview.pause();
+ previewCurrentLook();
 });
 document.getElementById('cover').addEventListener('change',e=>{
  if(coverUrl)URL.revokeObjectURL(coverUrl);
@@ -464,7 +478,7 @@ document.getElementById('cover').addEventListener('change',e=>{
 document.getElementById('intensity').addEventListener('input',e=>{
  const val=Number(e.target.value);
  document.getElementById('intensityValue').textContent=val+'%';
- localPreview.style.filter='contrast('+(1+val*0.0019)+') saturate('+(1+val*0.0038)+') brightness('+(1+val*0.00018)+')';
+ previewCurrentLook();
 });
 function sendWithProgress(payload){
  return new Promise((resolve,reject)=>{
