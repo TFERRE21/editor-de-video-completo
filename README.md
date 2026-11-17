@@ -11,7 +11,7 @@ Editor de vídeo web, com tratamento por trecho, prévia e modo Diretor Automát
 - **Capas**: imagem enviada pelo usuário ou quadro capturado do vídeo em reprodução.
 - **Prévia**: comparar tratamento visual aproximado e imagem original, antes de renderizar.
 - **Projetos**: salvar/carregar os parâmetros no navegador (localStorage). Arquivos de vídeo não são salvos no navegador; precisam ser selecionados novamente.
-- **Legendas SRT**: transcrição **opcional** usando `faster-whisper` local, arquivo SRT com grupos de até cinco palavras. Não há queima automática de legendas no vídeo nesta versão.
+- **Legendas SRT**: transcrição **opcional** usando `faster-whisper` local, com arquivo SRT em grupos de até cinco palavras. Também é possível anexar um SRT com tempos relativos ao vídeo final para incorporá-lo como **faixa de legendas selecionável no MP4**. Não há queima de texto sobre a imagem nesta versão.
 - Upload com barra de progresso separado da renderização e download de MP4.
 
 ## Hospedagem na iContainer — Python
@@ -33,6 +33,17 @@ docker compose up --build -d
 ```
 
 A análise automática tem limite de **500 MB por envio**, a transcrição de **400 MB** e o upload normal de **4 GB**, sujeito a restrições do proxy, disco e memória da hospedagem. A análise examina até os primeiros 30 minutos; confirme os cortes propostos antes de renderizar.
+
+## Variáveis recomendadas para VPS
+
+- `EDITOR_PASSWORD`: ao definir, ativa autenticação HTTP Basic para todas as rotas.
+- `EDITOR_USERNAME`: nome de usuário (padrão `admin`).
+- `MAX_PARALLEL_RENDERS`: quantidade máxima de renderizações simultâneas (padrão 1; máximo 4).
+- `EDITOR_KEEP_DAYS`: dias para conservar arquivos antes da limpeza acionada por novos envios (padrão 7).
+- `PORT`: porta HTTP (padrão 8080).
+- `EDITOR_DATA_DIR`: diretório de armazenamento persistente.
+
+A autenticação básica exige **HTTPS**, já que as credenciais não são criptografadas pelo protocolo Basic. A limpeza acontece quando houver um novo upload de edição, não é um agendador contínuo.
 
 ## Segurança e limitações
 
