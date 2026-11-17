@@ -10,6 +10,7 @@ from pathlib import Path
 
 import imageio_ffmpeg
 from render_engine import parse_scenes, render
+from smart_edit import automatic_plan
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -150,6 +151,36 @@ def process(job_id, source, music, cover, preset, cuts, start_at, end_at, intens
                 video=f"/api/jobs/{job_id}/video", size=target.stat().st_size)
     except Exception as exc:
         set_job(job_id, state="erro", message=str(exc)[:1900], progress=0)
+
+
+@app.post("/api/auto-plan")
+async def auto_plan(video: UploadFile = File(...), style: str = Form("social")):
+    if style not in {"social", "cinema", "igreja", "aula", "natural"}:
+        raise HTTPException(400, "Estilo automático inválido.")
+    ext = Path(video.filename or "").suffix.lower()
+    if ext not in VIDEO_EXTS:
+        raise HTTPException(400, "Selecione um vídeo válido.")
+    folder = DATA / ("analysis-" + uuid.uuid4().hex)
+    folder.mkdir(mode=0o700)
+    source = folder / ("analise" + ext)
+    try:
+        total = 0
+        with source.open("wb") as out:
+            while chunk := await video.read(1024*1024):
+                total += len(chunk)
+                if total > 500*1024*1024:
+                    raise HTTPException(413, "A análise automática aceita até 500 MB. Para arquivos maiores, use cortes manuais.")
+                out.write(chunk)
+        duration, has_audio = run_probe(source)
+        # O plano é baseado em detecção de mudanças e silêncios, não semântica.
+        scenes = await __import__("asyncio").to_thread(automatic_plan, FFMPEG, source, duration, has_audio, style)
+        return {"scenes": scenes, "duration": duration, "method": "FFmpeg scdet + silencedetect"}
+    except HTTPException:
+        raise
+    except (ValueError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(422, str(exc))
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 @app.post("/api/jobs")
