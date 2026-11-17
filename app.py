@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 import imageio_ffmpeg
+from render_engine import parse_scenes, render
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -119,95 +120,36 @@ def make_filters(preset, has_audio, intensity=65):
     return v, a if has_audio else None
 
 
-def process(job_id, source, music, cover, preset, cuts, start_at, end_at, intensity):
+def process(job_id, source, music, cover, preset, cuts, start_at, end_at, intensity,
+            scenes_json, audio_mode, voice_gain, music_gain, output_format):
     try:
-        set_job(job_id, state="analisando", message="Analisando vídeo", progress=2)
+        set_job(job_id, state="analisando", message="Analisando duração, cenas e faixas de áudio", progress=2)
         duration, has_audio = run_probe(source)
         start_at = max(0.0, min(float(start_at), duration - 0.1))
-        end_at = float(end_at) if float(end_at) > 0 else duration
-        end_at = min(end_at, duration)
+        end_at = min(duration, float(end_at)) if float(end_at) > 0 else duration
         if end_at - start_at < 0.3:
-            raise ValueError("Selecione um intervalo de pelo menos 0,3 segundo.")
-        segments = None
-        if cuts and has_audio:
-            set_job(job_id, message="Detectando pausas silenciosas", progress=4)
-            segments = detect_kept_segments(source, duration)
-            if segments:
-                segments = [(max(a, start_at), min(b, end_at)) for a,b in segments]
-                segments = [(a,b) for a,b in segments if b-a >= 0.3]
-                if not segments:
-                    raise ValueError("Os cortes automáticos removeriam todo o conteúdo; desative a opção de pausas.")
-        vf, af = make_filters(preset, has_audio, intensity)
+            raise ValueError("O intervalo selecionado precisa ter pelo menos 0,3 segundo.")
+        mapped_style = {"equilibrado": "natural", "dinamico": "vibrante", "suave": "natural"}.get(preset, "natural")
+        scenes = parse_scenes(scenes_json, duration, start_at, end_at, mapped_style)
+        if cuts and has_audio and not scenes_json:
+            set_job(job_id, message="Detectando pausas para remover", progress=4)
+            keep = detect_kept_segments(source, duration)
+            if keep:
+                keep = [(max(a, start_at), min(b, end_at)) for a,b in keep]
+                keep = [(a,b) for a,b in keep if b-a >= 0.3]
+                if keep:
+                    scenes = [{"start": a, "end": b, "speed": 1, "look": mapped_style,
+                               "zoom": "nenhum"} for a,b in keep]
         target = source.parent / "editado.mp4"
-        cmd = [FFMPEG, "-hide_banner", "-y", "-nostdin", "-loglevel", "error",
-               "-progress", "pipe:1", "-i", str(source)]
-        if music:
-            cmd += ["-stream_loop", "-1", "-i", str(music)]
-        if cover:
-            cmd += ["-loop", "1", "-framerate", "25", "-i", str(cover)]
-        cover_index = 2 if music else 1
-        filter_steps = []
-        if segments:
-            for i, (start, end) in enumerate(segments):
-                filter_steps += [
-                    f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}]",
-                    f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{i}]"
-                ]
-            joined = "".join(f"[v{i}][a{i}]" for i in range(len(segments)))
-            filter_steps.append(f"{joined}concat=n={len(segments)}:v=1:a=1[vc][ac]")
-            vin, ain = "[vc]", "[ac]"
-            output_duration = sum(end - start for start, end in segments)
-        else:
-            vin, ain, output_duration = "[vc]", "[ac]", end_at - start_at
-            filter_steps.append(f"[0:v]trim=start={start_at:.3f}:end={end_at:.3f},setpts=PTS-STARTPTS[vc]")
-            if has_audio:
-                filter_steps.append(f"[0:a]atrim=start={start_at:.3f}:end={end_at:.3f},asetpts=PTS-STARTPTS[ac]")
-        if cover:
-            # A capa substitui os primeiros 2 segundos da imagem, sem esconder o áudio.
-            filter_steps.append(f"{vin}{vf}[graded]")
-            filter_steps.append(
-                f"[{cover_index}:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[coverraw]"
-            )
-            filter_steps.append("[coverraw][graded]scale2ref=w=iw:h=ih[coverfit][gradedref]")
-            filter_steps.append("[gradedref][coverfit]overlay=0:0:enable='lt(t,2)':shortest=1:repeatlast=0[vout]")
-        else:
-            filter_steps.append(f"{vin}{vf}[vout]")
-        if has_audio:
-            filter_steps.append(f"{ain}{af}[clean]")
-            if music:
-                filter_steps.append("[1:a]volume=0.10[bg]")
-                filter_steps.append("[clean][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]")
-            else:
-                filter_steps.append("[clean]anull[aout]")
-        elif music:
-            filter_steps.append("[1:a]volume=0.14,loudnorm=I=-22:TP=-2:LRA=12[aout]")
-        cmd += ["-filter_complex", ";".join(filter_steps), "-map", "[vout]"]
-        if has_audio or music:
-            cmd += ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
-        else:
-            cmd += ["-an"]
-        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
-                "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-shortest",
-                str(target)]
-        set_job(job_id, state="processando", message="Aplicando efeitos e renderizando MP4", progress=8)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        # stderr can be read after completion; error log remains small (-loglevel error).
-        for line in proc.stdout:
-            if line.startswith("out_time_ms=") or line.startswith("out_time_us="):
-                try:
-                    micro = int(line.split("=", 1)[1])
-                    pct = min(98, max(8, int(8 + 90 * (micro / 1_000_000) / output_duration)))
-                    set_job(job_id, progress=pct)
-                except (ValueError, ZeroDivisionError):
-                    pass
-        error = proc.stderr.read()
-        if proc.wait() != 0 or not target.exists() or target.stat().st_size < 1024:
-            raise RuntimeError(error[-1400:] or "FFmpeg não conseguiu finalizar o vídeo.")
+        set_job(job_id, state="processando", message="Renderizando cada cena, cor, som e efeitos", progress=8)
+        render(FFMPEG, source, music, cover, target, scenes, duration, has_audio,
+               intensity, audio_mode, voice_gain, music_gain, output_format,
+               lambda p: set_job(job_id, progress=p))
         set_job(job_id, state="concluido", progress=100,
-                message="Vídeo editado e pronto para baixar", video=f"/api/jobs/{job_id}/video",
-                size=target.stat().st_size)
+                message="Edição completa. Visualize e baixe seu MP4.",
+                video=f"/api/jobs/{job_id}/video", size=target.stat().st_size)
     except Exception as exc:
-        set_job(job_id, state="erro", message=str(exc)[:1800], progress=0)
+        set_job(job_id, state="erro", message=str(exc)[:1900], progress=0)
 
 
 @app.post("/api/jobs")
@@ -219,7 +161,12 @@ async def create_job(
     cover: UploadFile | None = File(None),
     start_at: float = Form(0),
     end_at: float = Form(0),
-    intensity: int = Form(65)
+    intensity: int = Form(65),
+    scenes_json: str = Form(""),
+    audio_mode: str = Form("voz"),
+    voice_gain: float = Form(1.0),
+    music_gain: float = Form(0.12),
+    output_format: str = Form("original")
 ):
     if preset not in {"equilibrado", "dinamico", "suave"}:
         raise HTTPException(400, "Estilo inválido.")
@@ -232,6 +179,10 @@ async def create_job(
     cover_ext = Path(cover.filename or "").suffix.lower() if cover and cover.filename else ""
     if cover and cover.filename and cover_ext not in IMAGE_EXTS:
         raise HTTPException(400, "A capa deve ser JPG, PNG ou WebP.")
+    if audio_mode not in {"original", "limpo", "voz"} or output_format not in {"original", "vertical", "horizontal", "quadrado"}:
+        raise HTTPException(400, "Modo de áudio ou formato inválido.")
+    if not 0 <= voice_gain <= 2 or not 0 <= music_gain <= 0.8:
+        raise HTTPException(400, "Volumes fora da faixa permitida.")
     if not 0 <= intensity <= 100 or start_at < 0 or end_at < 0:
         raise HTTPException(400, "Parâmetros de edição inválidos.")
     job_id = uuid.uuid4().hex
@@ -274,7 +225,9 @@ async def create_job(
     with lock:
         jobs[job_id] = dict(id=job_id, state="na_fila", progress=0,
                             message="Aguardando processamento", video=None)
-    threading.Thread(target=process, args=(job_id, src, soundtrack, cover_path, preset, remove_silence, start_at, end_at, intensity),
+    threading.Thread(target=process, args=(job_id, src, soundtrack, cover_path, preset, remove_silence,
+                           start_at, end_at, intensity, scenes_json, audio_mode,
+                           voice_gain, music_gain, output_format),
                      daemon=True).start()
     return {"id": job_id}
 
