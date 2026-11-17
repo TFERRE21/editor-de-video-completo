@@ -14,6 +14,19 @@ Editor de vídeo web, com tratamento por trecho, prévia e modo Diretor Automát
 - **Legendas SRT**: transcrição **opcional** usando `faster-whisper` local, com arquivo SRT em grupos de até cinco palavras. Também é possível anexar um SRT com tempos relativos ao vídeo final para incorporá-lo como **faixa de legendas selecionável no MP4**. Não há queima de texto sobre a imagem nesta versão.
 - Upload com barra de progresso separado da renderização e download de MP4.
 
+## Prévia real no vídeo carregado (nova)
+
+1. Selecione o vídeo e clique em **Carregar vídeo para edição**. A barra de upload mostra o envio.
+2. Mova o cursor do vídeo até o trecho que deseja experimentar.
+3. Ajuste cores/zoom por cena e os novos controles de som.
+4. Clique em **Aplicar melhorias e ouvir prévia**. O servidor usa FFmpeg para renderizar até oito segundos do vídeo **já enviado**, com os mesmos filtros de áudio e imagem da exportação.
+5. Compare **Ouvir original** e **Ouvir melhorado**, altere os parâmetros e gere outra prévia antes da renderização final.
+6. Clique em **Melhorar vídeo automaticamente** para renderizar todo o projeto sem reenviar o vídeo original.
+
+Áudio: opções **Original, Limpo, Voz destacada, Estúdio, Podcast e Limpeza intensa**. Também é possível ajustar graves e agudos (-12 a +12 dB), nível de redução de ruído (0–100%), volume (0–200%) e gate. O modo limpeza intensa pode criar artefatos e afetar vozes baixas. Equalização e redução de ruído por filtros não são equivalentes à restauração neural de voz.
+
+A prévia de oito segundos não inclui trilha musical opcional, capa, legendas ou cortes múltiplos: ela mostra os **filtros do ponto escolhido**. Esses outros elementos entram na exportação final. Se alterar o vídeo original, carregue o novo arquivo novamente. A aplicação mantém arquivos na VPS temporariamente e o identificador da mídia é válido enquanto o processo estiver ativo.
+
 ## Hospedagem na iContainer — Python
 
 Instale `requirements.txt`, use `app.py` como comando de inicialização. Ele inicia Uvicorn na porta configurada por `PORT`, padrão 8080. FFmpeg é disponibilizado por `imageio-ffmpeg` quando não existe no PATH.
