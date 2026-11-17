@@ -1,4 +1,6 @@
 import json
+import base64
+import secrets
 import os
 import re
 import shutil
@@ -18,6 +20,27 @@ from fastapi.responses import FileResponse, HTMLResponse
 from starlette.background import BackgroundTask
 
 app = FastAPI(title="Editor de Vídeo Automático")
+@app.middleware("http")
+async def optional_password_gate(request, call_next):
+    password = os.getenv("EDITOR_PASSWORD", "")
+    if password:
+        auth = request.headers.get("Authorization", "")
+        allowed = False
+        if auth.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth[6:], validate=True).decode("utf-8")
+                username, supplied = decoded.split(":", 1)
+                allowed = (secrets.compare_digest(username, os.getenv("EDITOR_USERNAME", "admin"))
+                           and secrets.compare_digest(supplied, password))
+            except (ValueError, UnicodeDecodeError):
+                pass
+        if not allowed:
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse("Autenticação necessária para acessar o editor.", status_code=401,
+                                     headers={"WWW-Authenticate": 'Basic realm="Editor de Video"'})
+    return await call_next(request)
+
+
 DATA = Path(os.getenv("EDITOR_DATA_DIR", "/data"))
 try:
     DATA.mkdir(parents=True, exist_ok=True)
