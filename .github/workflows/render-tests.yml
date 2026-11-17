@@ -4,6 +4,8 @@ on:
     paths:
       - 'app.py'
       - 'render_engine.py'
+      - 'smart_edit.py'
+      - 'captions.py'
       - 'requirements.txt'
       - '.github/workflows/render-tests.yml'
   workflow_dispatch:
@@ -19,7 +21,7 @@ jobs:
       - name: Instalar dependências e validar sintaxe
         run: |
           python -m pip install -r requirements.txt
-          python -m py_compile app.py render_engine.py
+          python -m py_compile app.py render_engine.py smart_edit.py captions.py
       - name: Criar vídeo e capa de testes
         run: |
           ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=30 -f lavfi -i sine=frequency=400:sample_rate=48000 -t 3 -c:v libx264 -pix_fmt yuv420p -c:a aac -y /tmp/original.mp4
@@ -34,5 +36,10 @@ jobs:
           render(shutil.which('ffmpeg'), Path('/tmp/original.mp4'), None, Path('/tmp/capa.png'),
                  Path('/tmp/editado.mp4'), scenes,3,True,80,'voz',1.0,0.1,'horizontal',lambda n: None)
           assert Path('/tmp/editado.mp4').stat().st_size > 1000
+          from smart_edit import automatic_plan
+          plan=automatic_plan(shutil.which('ffmpeg'),Path('/tmp/original.mp4'),3,True,'social')
+          assert plan and plan[0]['end']>plan[0]['start']
+          from captions import to_srt_time
+          assert to_srt_time(65.333)=='00:01:05,333'
           print('Renderização multicenas concluída:',Path('/tmp/editado.mp4').stat().st_size)
           PY
