@@ -5,6 +5,9 @@ Aplicação web para enviar um vídeo e receber uma versão editada automaticame
 ## Recursos
 - Upload de MP4, MOV, MKV ou WebM (até 1 GB)
 - Presets: equilibrado, dinâmico e suave
+- Prévia local do vídeo, corte com início e fim em segundos
+- Envio de capa JPG/PNG/WebP aplicada aos 2 segundos iniciais
+- Controle ajustável de intensidade dos efeitos de imagem (0 a 100%)
 - Correção de contraste, saturação, brilho e nitidez
 - Redução de ruído visual
 - Redução de ruído do áudio, compressão e normalização de volume
